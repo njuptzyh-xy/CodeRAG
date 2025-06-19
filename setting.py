@@ -11,29 +11,45 @@ EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://202.112.238.121:24520/embeddi
 EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
 
 # Chat 模型设置
-CHAT_URL = os.getenv('CHAT_URL', "https://api.siliconflow.cn/v1")
-CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "Qwen/Qwen2.5-7B-Instruct")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-xixodpzlalrfxhgmhxrmyykbcedfgcbmzlwhcbggcsrxzmho")
+CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
+CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
+CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-6634a465c08f4b8e9bb490f1ff77ea8a")
 CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
 CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 
 # rerank 模型设置
-RERANK_URL = os.getenv('RERANK_URL', "http://10.1.1.125:5205/rerank")
+RERANK_URL = os.getenv('RERANK_URL', "http://202.112.238.121:24520/rerank")
+
+# ====== ES 配置==================
+# ip、端口、身份验证设置
+ES_HOST = os.getenv('ES_HOST', "10.1.1.105")
+ES_PORT = os.getenv('ES_PORT', 9200)
+ES_AUTH_NAME = os.getenv('ES_AUTH_NAME', "elastic")
+ES_AUTH_PASSWORD =  os.getenv('ES_AUTH_PASSWORD', "huaqing")
+# es 这个项目使用的索引 
+ES_INDEX = os.getenv('ES_INDEX', "qax_graph_rag")
+# es 这两种索引方式返回的数据量 
+ES_FULLTEXT_SIZE = os.getenv('ES_FULLTEXT_SIZE', 100)
+ES_VECTOR_SIZE = os.getenv('ES_VECTOR_SIZE', 10)
+# es 混合搜索的时候最终返回的数据条目
+ES_RETURN_SIZE = os.getenv('ES_RETURN_SIZE', 10)
+# es 全文索引、和向量索引字段
+ES_FULLTEXT_INDEX_FILED =  os.getenv('ES_FULLTEXT_INDEX_FILED', "description")
+ES_VECTOR_FILED = os.getenv('ES_VECTOR_FILED', "description_embedding")
+# es 全文索引结果和向量搜索结果的权重数值
+ES_ALPHA = os.getenv('ES_ALPHA', 0.6)
 
 # 图谱查询的节点字段
 NODE_RETURN_FIELDS = {
-    "MitreAttackArticleChunk": ["description", "insert_type", "source_url"],
-    "MitreAttackArticleDocument": ["insert_type", "mitre_attack_id_list", 
-                                   "procedure_examples_id", "procedure_examples_name", "source_url"],
-    "MitreAttackCampaign": ["description", "attack_id", "attack_first_seen_citation", 
-                            "attack_last_seen_citation", "name", "ref_url", "stix_id"],
-    "MitreAttackCodeSoftware": ["description", "insert_type", "software_name", "tactic_id_list"],
-    "MitreAttackDataComponent": ["description", "name", "stix_id", "stix_type"],
-    "MitreAttackDataSource": ["attack_id", "description", "name", "ref_url", "stix_id", "stix_type"],
-    "MitreAttackGroup": ["attack_id", "description", "name", "ref_url", "stix_id", "stix_type"],
-    "MitreAttackMitigation": ["attack_id", "description", "name", "ref_url", "stix_id", "stix_type"],
-    "MitreAttackSoftware": ["attack_id", "description", "name", "ref_url", "stix_id", "stix_type"],
-    "MitreAttackSoftwareFile": ["description", "file_name", "file_path", "insert_type", "software_name", "technique_id"],
-    "MitreAttackTactic": ["attack_id", "attack_shortname", "description", "name", "ref_url", "stix_type", "stix_id"],
-    "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url", "stix_type", "stix_id"]
+    "MitreAttackArticleChunk": ["description", "source_url"],
+    "MitreAttackArticleDocument": ["insert_type", "procedure_examples_id", "procedure_examples_name", "source_url", "title"],
+    "MitreAttackCampaign": ["description", "attack_id", "attack_first_seen_citation", "attack_last_seen_citation", "name", "ref_url"],
+    "MitreAttackCodeSoftware": ["description", "name"],
+    "MitreAttackCodeSoftwareCodeChunk": ["description", "technique_id", "code_data"],
+    "MitreAttackDataComponent": ["description", "name"],
+    "MitreAttackDataSource": ["attack_id", "description", "name", "ref_url"],
+    "MitreAttackGroup": ["attack_id", "description", "name", "ref_url"],
+    "MitreAttackMitigation": ["attack_id", "description", "name", "ref_url"],
+    "MitreAttackTactic": ["attack_id", "attack_shortname", "description", "name", "ref_url"],
+    "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url"]
 }

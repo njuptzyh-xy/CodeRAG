@@ -1,5 +1,10 @@
-from neo4j_driver import driver
+# from neo4j_driver import driver
+from neo4j import GraphDatabase
+from setting import NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI
 
+AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
 def get_description_by_id(mitre_attack_id):
     query = f"""

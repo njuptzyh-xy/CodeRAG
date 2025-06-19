@@ -12,43 +12,16 @@ app = Flask(__name__)
 def query():
     # 获取问题和流式参数
     question = request.args.get('question', None)
-    stream = request.args.get('stream', 'false').lower() == 'true'
     
     if question is None:
-        return jsonify({'code': '400', 'message': '请输入问题'})
+        return jsonify({'code': '400', 'data': [], 'message': '请输入问题'})
     
-    if stream:
-        # 使用 Server-Sent Events 格式返回流式响应
-        def generate():
-            # 发送开始事件
-            yield "event: start\ndata: {}\n\n"
-            
-            # 获取流式生成器
-            try:
-                for chunk in query_graphrag(question, stream=True):
-                    # 构建事件数据
-                    data = json.dumps({"code": "200", "type": "chunk", "content": chunk})
-                    yield f"event: chunk\ndata: {data}\n\n"
-            except Exception as e:
-                # 发送错误事件
-                error_data = json.dumps({"code": "500", "type": "error", "message": str(e)})
-                yield f"event: error\ndata: {error_data}\n\n"
-            
-            # 发送结束事件
-            yield "event: end\ndata: {}\n\n"
-            
-        return Response(
-            stream_with_context(generate()),
-            content_type='text/event-stream',
-            headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'}
-        )
-    else:
-        # 非流式响应处理
-        try:
-            answer = query_graphrag(question, stream=False)
-            return jsonify({'code': '200', 'message': answer})
-        except Exception as e:
-            return jsonify({'code': '500', 'message': f'处理请求时出错: {str(e)}'})
+    # 非流式响应处理
+    try:
+        answer = query_graphrag(question)
+        return jsonify({'code': '200', 'data': answer, 'message': "success"})
+    except Exception as e:
+        return jsonify({'code': '500', 'data': [], 'message': f'处理请求时出错: {str(e)}'})
         
         
 @app.route('/rag_api/get_description_by_id', methods=['GET'])
