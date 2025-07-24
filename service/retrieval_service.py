@@ -1,19 +1,25 @@
 import json
 import requests
-from neo4j_driver import Neo4jHelper
-from neo4j_graphrag.retrievers import VectorCypherRetriever
+from database_helper.neo4j_helper import Neo4jHelper
 from openai import OpenAI
 from setting import (
     CHAT_MODEL_NAME, CHAT_MODEL_API_KEY, CHAT_URL, 
     CHAT_TEMPERATURE, CHAT_MAX_TOKENS, RERANK_URL, EMBEDDING_URL
 )
-from es_helper import ESHelper
-from prompts import get_prompts
+from database_helper.es_helper import ESHelper
+from utils.prompts import get_prompts
 
 
-# 集成 openai 接口
+def query_graphrag(question):
+    retrieval = RetrievalRoute(question)
+    # 进行处理
+    result = retrieval.handle_question()
+    
+    return result
+
+
 class OpenaiEmbeddingClient:
-    """自定义嵌入模型客户端，使用 requests 调用"""
+    """自定义嵌入模型客户端，使用 requests 调用，集成 openai 接口"""
     def __init__(self, embedding_url):
         self.embedding_url = embedding_url
 
@@ -30,8 +36,9 @@ class OpenaiEmbeddingClient:
         response.raise_for_status()
         return response.json()["embeddings"][0]
 
-# 自定义兼容 OpenAI 接口的嵌入模型类
+
 class CustomOpenAIEmbeddings:
+    # 自定义兼容 OpenAI 接口的嵌入模型类
     def __init__(self, api_base=EMBEDDING_URL):
         self.api_base = api_base
         self.openai_client = OpenaiEmbeddingClient(embedding_url=self.api_base)
@@ -152,7 +159,6 @@ class RetrievalRoute:
         
         # 接下来进行 neo4j 的数据收集和返回
         for es_item in es_data:
-            print(len(es_item))
             es_item_neo4j_id = es_item["source"]["neo4j_id"]
             final_result.append(self.neo4j_drive.get_single_point_data(es_item_neo4j_id))            
             

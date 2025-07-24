@@ -152,8 +152,3 @@ def get_detail_by_ids(neo_ids):
                 
     return document_and_code_data
         
-        
-                
-                
-                
-            
