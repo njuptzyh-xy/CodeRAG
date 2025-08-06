@@ -62,4 +62,4 @@ ENV LANG=zh_CN.GB18030
 
 
 # 设置启动命令
-ENTRYPOINT ["python3", "/home/neo4j-search/search-api.py"]
+ENTRYPOINT ["python3", "/home/neo4j-search/create_app.py"]

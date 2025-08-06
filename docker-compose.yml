@@ -34,5 +34,20 @@ services:
       - CHAT_MODEL_API_KEY=sk-xixodpzlalrfxhgmhxrmyykbcedfgcbmzlwhcbggcsrxzmho
       - CHAT_TEMPERATURE=0
       - CHAT_MAX_TOKENS=30000
+      - RERANK_URL = http://202.112.238.121:24520/rerank
+      - UPLOAD_FILE_CHUNK_URL = http://202.112.238.121:24520/submit-parse-job-from-file
+      - DOWNLOAD_FIULE_CHUNK_URL = http://202.112.238.121:24520/task-status/
+      - OCR_URL = http://202.112.238.121:24520/ocr-image
+      - ES_HOST = 10.1.1.105
+      - ES_PORT = 9200
+      - ES_AUTH_NAME = elastic
+      - ES_AUTH_PASSWORD = huaqing
+      - ES_INDEX = qax_graph_rag
+      - ES_FULLTEXT_SIZE = 50
+      - ES_VECTOR_SIZE = 10
+      - ES_RETURN_SIZE = 10
+      - ES_FULLTEXT_INDEX_FILED = description
+      - ES_VECTOR_FILED = description_embedding
+      - ES_ALPHA = 0.6
     depends_on:
       - neo4j

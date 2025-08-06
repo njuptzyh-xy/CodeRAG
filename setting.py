@@ -19,6 +19,14 @@ CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 
 # rerank 模型设置
 RERANK_URL = os.getenv('RERANK_URL', "http://202.112.238.121:24520/rerank")
+# 上传文件切块请求 url
+UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://202.112.238.121:24520/submit-parse-job-from-file")
+DOWNLOAD_FIULE_CHUNK_URL = os.getenv('DOWNLOAD_FIULE_CHUNK_URL', "http://202.112.238.121:24520/task-status/")
+# 图片识别 url
+OCR_URL = os.getenv('OCR_URL', "http://202.112.238.121:24520/ocr-image")
+
+
+
 
 # ====== ES 配置==================
 # ip、端口、身份验证设置
