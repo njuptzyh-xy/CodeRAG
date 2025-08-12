@@ -5,7 +5,7 @@ from datetime import datetime
 from openai import OpenAI
 from elasticsearch import Elasticsearch
 from neo4j import GraphDatabase
-from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_URL, DOWNLOAD_FIULE_CHUNK_URL, EMBEDDING_URL, ES_AUTH_NAME, ES_AUTH_PASSWORD, ES_HOST, ES_INDEX, ES_PORT, 
+from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, DOWNLOAD_FIULE_CHUNK_URL, EMBEDDING_URL, ES_AUTH_NAME, ES_AUTH_PASSWORD, ES_HOST, ES_INDEX, ES_PORT, 
                      OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI)
 from utils.map_prompt import ANALYZE_FILE_TECHNIQUE_PROMPT
 
@@ -90,7 +90,7 @@ def judge_data_about_safe(response_data):
     messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
     
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=CHAT_MODEL_NAME,
         messages=messages,
         response_format={
             'type': 'json_object'
@@ -212,7 +212,7 @@ def get_summary_for_document(document_text):
     messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
     
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=CHAT_MODEL_NAME,
         messages=messages,
         response_format={
             'type': 'json_object'
@@ -257,7 +257,7 @@ def map_document_technical_request(document_text):
     messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
     
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=CHAT_MODEL_NAME,
         messages=messages,
         response_format={
             'type': 'json_object'

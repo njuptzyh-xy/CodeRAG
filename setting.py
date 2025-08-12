@@ -31,21 +31,21 @@ OCR_URL = os.getenv('OCR_URL', "http://202.112.238.121:24520/ocr-image")
 # ====== ES 配置==================
 # ip、端口、身份验证设置
 ES_HOST = os.getenv('ES_HOST', "10.1.1.105")
-ES_PORT = os.getenv('ES_PORT', 9200)
+ES_PORT = int(os.getenv('ES_PORT', 3000))
 ES_AUTH_NAME = os.getenv('ES_AUTH_NAME', "elastic")
 ES_AUTH_PASSWORD =  os.getenv('ES_AUTH_PASSWORD', "huaqing")
 # es 这个项目使用的索引 
 ES_INDEX = os.getenv('ES_INDEX', "qax_graph_rag")
 # es 这两种索引方式返回的数据量 
-ES_FULLTEXT_SIZE = os.getenv('ES_FULLTEXT_SIZE', 100)
-ES_VECTOR_SIZE = os.getenv('ES_VECTOR_SIZE', 10)
+ES_FULLTEXT_SIZE = int(os.getenv('ES_FULLTEXT_SIZE', 50))
+ES_VECTOR_SIZE = int(os.getenv('ES_VECTOR_SIZE', 10))
 # es 混合搜索的时候最终返回的数据条目
-ES_RETURN_SIZE = os.getenv('ES_RETURN_SIZE', 10)
+ES_RETURN_SIZE = int(os.getenv('ES_RETURN_SIZE', 10))
 # es 全文索引、和向量索引字段
 ES_FULLTEXT_INDEX_FILED =  os.getenv('ES_FULLTEXT_INDEX_FILED', "description")
 ES_VECTOR_FILED = os.getenv('ES_VECTOR_FILED', "description_embedding")
 # es 全文索引结果和向量搜索结果的权重数值
-ES_ALPHA = os.getenv('ES_ALPHA', 0.6)
+ES_ALPHA = float(os.getenv('ES_ALPHA', 0.6))
 
 # 图谱查询的节点字段
 NODE_RETURN_FIELDS = {

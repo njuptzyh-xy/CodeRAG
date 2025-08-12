@@ -46,9 +46,9 @@ RUN dpkg-reconfigure -f noninteractive tzdata
 # 将依赖包拷贝到 docker
 ADD ./requirements.txt /requirements.txt
 RUN apt-get update
-RUN pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn
-RUN python3 -m pip install --upgrade setuptools -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn
-RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn -r /requirements.txt
+RUN pip3 install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+RUN python3 -m pip install --upgrade setuptools -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+RUN pip3 install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r /requirements.txt
 
 
 WORKDIR /home/neo4j-search
@@ -63,3 +63,7 @@ ENV LANG=zh_CN.GB18030
 
 # 设置启动命令
 ENTRYPOINT ["python3", "/home/neo4j-search/create_app.py"]
+
+# COPY start.sh /home/neo4j-search/start.sh
+# RUN chmod +x /home/neo4j-search/start.sh
+# ENTRYPOINT ["/home/neo4j-search/start.sh"]

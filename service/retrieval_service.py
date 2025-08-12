@@ -13,6 +13,7 @@ from utils.prompts import get_prompts
 def query_graphrag(question):
     retrieval = RetrievalRoute(question)
     # 进行处理
+    print("00000000000000000000000000\n")
     result = retrieval.handle_question()
     
     return result
@@ -161,7 +162,7 @@ class RetrievalRoute:
         for es_item in es_data:
             es_item_neo4j_id = es_item["source"]["neo4j_id"]
             final_result.append(self.neo4j_drive.get_single_point_data(es_item_neo4j_id))            
-            
+        print("============================\n", final_result)
         return final_result
 
     def vector_expansion_search(self):
@@ -196,6 +197,7 @@ class RetrievalRoute:
         # 先判断应该使用那个策略
         search_strategy = self.judge_retrieval_route()
         
+        print("=================\n", search_strategy)
         # 有了策略之后进行分函数处理, 
         # hybrid_search 混合检索， graph_query 生成语句检索， vector_expansion 向量比对两跳查询
         result = self.strategy_dict.get(search_strategy)()

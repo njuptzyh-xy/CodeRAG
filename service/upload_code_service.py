@@ -346,8 +346,8 @@ def add_relateship(all_file_ids, software_uuid):
         for file_uuid in all_file_ids:
             # 查询该文件下的所有代码片段及其技术 ID
             search_code_techniques_query = """
-            MATCH (file:MitreAttackCodeSoftwareFile {file_uuid: $file_uuid})
-            RETURN file.code_uuid AS code_uuid, file.technique_id AS technique_id
+            MATCH (code:MitreAttackCodeSoftwareCodeChunk {file_uuid: $file_uuid})
+            RETURN code.code_uuid AS code_uuid, code.technique_id AS technique_id
             """
             code_techniques = session.run(search_code_techniques_query, file_uuid=file_uuid)
             
