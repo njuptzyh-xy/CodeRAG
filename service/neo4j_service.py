@@ -152,3 +152,25 @@ def get_detail_by_ids(neo_ids):
                 
     return document_and_code_data
         
+def get_article_and_software_count():
+    article_count_query = """
+        MATCH (n:MitreAttackArticleDocument)
+        RETURN count(n) AS article_count
+    """
+    software_count_query = """
+        MATCH (n:MitreAttackCodeSoftware)
+        RETURN count(n) AS software_count
+    """
+    
+    with driver.session() as session:
+        article_result = session.run(article_count_query)
+        article_count = article_result.single()["article_count"]
+
+        software_result = session.run(software_count_query)
+        software_count = software_result.single()["software_count"]
+        
+    return {
+        "article_count": article_count,
+        "software_count": software_count
+    }
+        
