@@ -13,7 +13,7 @@ EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
 # Chat 模型设置
 CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
 CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-6634a465c08f4b8e9bb490f1ff77ea8a")
+CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-896ca4dae917485184a075dfb363759c")
 CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
 CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 
