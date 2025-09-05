@@ -2,4 +2,5 @@
 *.iml
 **/__pycache__/
 .history/
-
+*.log
+upload_file

@@ -174,3 +174,39 @@ def get_article_and_software_count():
         "software_count": software_count
     }
         
+def get_articles_by_attack_id(attack_id):
+    """
+    根据ATT&CK ID获取相关文章统计信息
+    返回文章数量、标题、描述（50字）和来源URL
+    """
+    query = """
+    MATCH (article:MitreAttackArticleDocument)
+    WHERE $attack_id IN article.mitre_attack_id_list
+    RETURN article.title as title, 
+           article.article_summary as summary, 
+           article.source_url as source_url
+    """
+    
+    articles = []
+    with driver.session() as session:
+        result = session.run(query, attack_id=attack_id)
+        for record in result:
+            # 处理描述，截取前50个字
+            summary = record.get('summary', '')
+            if summary:
+                # 简单截取前50个字符作为描述
+                short_description = summary[:50] + '...' if len(summary) > 50 else summary
+            else:
+                short_description = "无描述"
+                
+            articles.append({
+                'title': record.get('title', '无标题'),
+                'description': short_description,
+                'source_url': record.get('source_url', '无URL')
+            })
+    
+    return {
+        'attack_id': attack_id,
+        'article_count': len(articles),
+        'articles': articles
+    }

@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from service.neo4j_service import get_description_by_id, get_data_by_id, get_detail_by_ids, get_article_and_software_count
+from service.neo4j_service import get_description_by_id, get_data_by_id, get_detail_by_ids, get_article_and_software_count, get_articles_by_attack_id
 
 neo4j_route = Blueprint('neo4j_route', __name__)
 
@@ -48,3 +48,15 @@ def get_detail_by_ids_route():
 def get_neo4j_node_count():
     result = get_article_and_software_count()
     return jsonify(result)
+
+@neo4j_route.route('/get_articles_by_attack_id', methods=['GET'])
+def get_articles_by_attack_id_route():
+    # 获取ATT&CK ID
+    attack_id = request.args.get('attack_id', None)
+    if not attack_id:
+        return jsonify({'code': '400', 'message': '请输入ATT&CK ID', 'data': ''})
+    
+    # 执行查询
+    data = get_articles_by_attack_id(attack_id)
+    
+    return jsonify({'code': '200', 'message': 'success', 'data': data})

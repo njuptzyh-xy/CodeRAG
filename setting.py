@@ -1,7 +1,7 @@
 import os
 
 # neo4j 数据库设置
-NEO4J_URI = os.getenv('NEO4J_URI', "neo4j://127.0.0.1:7687")
+NEO4J_URI = os.getenv('NEO4J_URI', "bolt://10.3.16.60:7687")
 NEO4J_USER = os.getenv('NEO4J_USER', "neo4j")
 NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', "D6gkdYMp3NrDzh")
 INDEX_NAME = os.getenv('INDEX_NAME', "mitre_acttack_index")
