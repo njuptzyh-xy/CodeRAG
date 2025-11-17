@@ -16,9 +16,9 @@ except ImportError:
 
 def main():
     """
-    主函数，用于连接 Neo4j 并验证指定批次号的文档数量。
+    主函数，用于连接 Neo4j 并验证指定批次号的文档和软件数量。
     """
-    parser = argparse.ArgumentParser(description="验证 Neo4j 数据库中指定批次的文档数量。")
+    parser = argparse.ArgumentParser(description="验证 Neo4j 数据库中指定批次的文档和软件数量。")
     parser.add_argument("batch_number", type=int, help="要查询的批次号。")
     args = parser.parse_args()
 
@@ -36,24 +36,38 @@ def main():
         print("数据库连接成功！")
 
         # 2. 执行 Cypher 查询
-        query = """
+        doc_query = """
         MATCH (d:MitreAttackArticleDocument {insert_number: $batch_number})
         RETURN count(d) AS document_count
         """
         
-        print(f"正在查询批次号为 {batch_number} 的文档数量...")
+        software_query = """
+        MATCH (s:MitreAttackCodeSoftware {insert_number: $batch_number})
+        RETURN count(s) AS software_count
+        """
         
         with driver.session() as session:
-            result = session.run(query, batch_number=batch_number)
-            record = result.single()
+            print(f"正在查询批次号为 {batch_number} 的文档数量...")
+            doc_result = session.run(doc_query, batch_number=batch_number)
+            doc_record = doc_result.single()
             
-            if record:
-                count = record["document_count"]
-                print("\n--- 查询结果 ---")
-                print(f"在 Neo4j 数据库中，批次号为 {batch_number} 的文档共有: {count} 个。")
-                print("------------------")
+            print(f"正在查询批次号为 {batch_number} 的软件数量...")
+            software_result = session.run(software_query, batch_number=batch_number)
+            software_record = software_result.single()
+            
+            print("\n--- 查询结果 ---")
+            if doc_record:
+                doc_count = doc_record["document_count"]
+                print(f"在 Neo4j 数据库中，批次号为 {batch_number} 的文档共有: {doc_count} 个。")
             else:
-                print("查询未返回结果。")
+                print("文档查询未返回结果。")
+
+            if software_record:
+                software_count = software_record["software_count"]
+                print(f"在 Neo4j 数据库中，批次号为 {batch_number} 的软件共有: {software_count} 个。")
+            else:
+                print("软件查询未返回结果。")
+            print("------------------")
 
     except ServiceUnavailable:
         print(f"错误：无法连接到 Neo4j 数据库，请检查 URI '{uri}' 是否正确以及数据库服务是否正在运行。")
