@@ -1,12 +1,17 @@
+import sys
 import os
+
+# 将项目根目录添加到 sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import requests
 from datetime import datetime
 from openai import OpenAI
 from elasticsearch import Elasticsearch
 from neo4j import GraphDatabase
-from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, DOWNLOAD_FIULE_CHUNK_URL, EMBEDDING_URL, ES_AUTH_NAME, ES_AUTH_PASSWORD, ES_HOST, ES_INDEX, ES_PORT, 
-                     OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI)
+from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, DOWNLOAD_FILE_CHUNK_URL, EMBEDDING_URL, ES_AUTH_NAME, ES_AUTH_PASSWORD, ES_HOST, ES_INDEX, ES_PORT, 
+                     OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI, EMBEDDING_MODEL, EMBEDDING_API_KEY)
 from utils.map_prompt import ANALYZE_FILE_TECHNIQUE_PROMPT
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
@@ -18,11 +23,20 @@ es = Elasticsearch(
                 basic_auth=(ES_AUTH_NAME, ES_AUTH_PASSWORD),
             )
 
+# 创建一个全局的 Session 对象
+session = requests.Session()
+
+# 可以在这里为 Session 对象配置适配器，例如设置连接池大小
+adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+
 def submit_task_to_parse(file_path, file_type):
     # 进行提交切分操作
     submit_url = UPLOAD_FILE_CHUNK_URL
 
     with open(file_path, "rb") as f:
+        file_name = os.path.basename(file_path)
         files = {
             "file": (os.path.basename(file_path), f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         }
@@ -30,25 +44,28 @@ def submit_task_to_parse(file_path, file_type):
             "file_type": file_type,
             "metadata": '{"chunk_size": 2048,"chunk_overlap": 512}'
         }
-        response = requests.post(submit_url, files=files, data=data)
+        response = session.post(submit_url, files=files, data=data)
         if response.status_code == 200:
             task_data = response.json()
             task_id = task_data.get("task_id")
             message = task_data.get("message")
+            print(f"{file_name} 任务提交成功，任务ID: {task_id}")
         elif response.status_code == 202:
             task_data = response.json()
             task_id = task_data.get("task_id")
             message = task_data.get("message")
+            print(f"{file_name} 任务提交成功，任务ID: {task_id}")
         elif response.status_code == 400 or response.status_code == 500:
             task_data = response.json()
             message = task_data.get("detail")
+            print(f"{file_name} 提交失败，错误信息: {message}")
             return {"status": "error", "message": message}
 
     return {"status": "success", "task_id": task_id, "message": message}
 
 def download_file_data(task_id, file_name):
-    download_url = DOWNLOAD_FIULE_CHUNK_URL + str(task_id)
-    response = requests.get(download_url)
+    download_url = DOWNLOAD_FILE_CHUNK_URL + str(task_id)
+    response = session.get(download_url)
     if response.status_code == 200:
         response_data = response.json()
         if response_data["status"] == "SUCCESS":
@@ -64,7 +81,7 @@ def download_file_data(task_id, file_name):
             error_info = response_data["error_info"]
             return {"status": "FAILED", "error_info": error_info}
     else:
-        return {"stauts": "FAILED", "error_info": {}}
+        return {"status": "FAILED", "error_info": {}}
 
 def judge_data_about_safe(response_data):
     user_prompt = f"""
@@ -105,7 +122,7 @@ def get_picture_data_by_ocr(picture_data):
     payload = {
         "base64_str": picture_data
     }
-    response = requests.post(ocr_url, json=payload)
+    response = session.post(ocr_url, json=payload)
     if response.status_code == 200:
         response_data = response.json().get("ocr_result")
         # 接下来判断 response_data 的类型，
@@ -153,6 +170,7 @@ def handle_picture_in_json_file(chunk_json_file_path):
     # 处理完后写回
     with open(chunk_json_file_path, "w", encoding="utf-8") as f:
         json.dump(file_data, f, ensure_ascii=False, indent=2)
+        return {"status": "success"}
 
 def delete_image_sign(path):
     with open(path, "r", encoding="utf-8") as file:
@@ -293,7 +311,7 @@ def map_document_to_technical(path):
     except Exception as e:
         return {"data": str(e), "status": "error"}
 
-def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text):
+def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text, document_insert_number=0):
     document_path = os.path.join("upload_file", file_name_txt)
     with open(document_path, "r", encoding="utf-8") as f:
         # 文章正文
@@ -333,7 +351,7 @@ def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chu
         )
         document_element_id = result.single()["element_id"]
         
-        print("看看 documengt_id\n", document_element_id)
+        # print("看看 documengt_id\n", document_element_id)
 
 def get_embhedding(chunk_description):
     url = EMBEDDING_URL
@@ -343,11 +361,12 @@ def get_embhedding(chunk_description):
     }
     # 设置请求头
     headers = {
+        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
         "Content-Type": "application/json"
     }
     try:
         # 发送POST请求
-        response = requests.post(url=url, headers=headers, json=req_body)
+        response = session.post(url=url, headers=headers, json=req_body)
         # 检查响应状态
         if response.status_code == 200:
             data = response.json()
@@ -371,7 +390,10 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
         chunk_description = chunk_item.get("content")
             
         chunk_description_embedding = get_embhedding(chunk_description)
-            
+        if chunk_description_embedding is None:
+            print(f"{chunk_id} chunk 描述embedding 失败")
+            continue
+
         chunk_index = chunk_item.get("metadata", {}).get("chunk_number")
         chunk_id = chunk_item.get("metadata", {}).get("chunk_id")
         chunk_insert_number = 0
@@ -505,7 +527,7 @@ def add_es(all_embedding_element_id):
             
     print(f"导入完成！成功: {success_count}, 失败: {error_count}")
 
-def handle_file(source_name, file_path, file_name, file_type):
+def handle_file(source_name, file_path, file_name, file_type, document_insert_number=0):
     # 提交切分
     task_id_and_message_data = submit_task_to_parse(file_path, file_type)
     if task_id_and_message_data["status"] == "error":
@@ -522,12 +544,14 @@ def handle_file(source_name, file_path, file_name, file_type):
         status = download_file_data(task_id, file_name)
         if status["status"] == "SUCCESS":
             chunk_json_file_name = status["file_name"]
+            print(f"{file_name} 文件切分成功")
             break
         elif status["status"] == "PROCESSING":
             continue
         elif status["status"] == "FAILED":
             is_sign = False
             error_info = status["error_info"]
+            print(f"{file_name} 文件切分失败，错误信息: {error_info}")
             break
     
     # 先判断是不是失败了
@@ -536,10 +560,15 @@ def handle_file(source_name, file_path, file_name, file_type):
     
     # 处理文件中的图片，有和安全有关的替换成文字
     chunk_json_file_path = os.path.join("upload_file", chunk_json_file_name)
-    handle_picture_in_json_file(chunk_json_file_path)
-    
+    status = handle_picture_in_json_file(chunk_json_file_path)
+    if status["status"] == "success":
+        print(f"{file_name} 文字替换完成")
+    else:
+        print(f"{file_name} 文字替换失败，错误信息: {status['message']}")
+
     # 将文件中的和安全无关的图片删掉
     delete_image_sign(chunk_json_file_path)
+    print(f"{file_name} 无关图片删除完成")
     
     # 将整个 json 组合成一个 txt 文件
     save_path, file_name_txt = get_all_documents_text(chunk_json_file_path, chunk_json_file_name)
@@ -548,27 +577,32 @@ def handle_file(source_name, file_path, file_name, file_type):
     summary_text = get_all_documents_summary(save_path)
     if summary_text == "error":
         return {"status": "error", "message": "get document summary failed!"}
+    print(f"{file_name} 文章总结完成")
 
     # 接下来进行技术矩阵对应
     technical_dict = map_document_to_technical(save_path)
     if technical_dict["status"] == "error":
         return {"status": "error", "message": technical_dict["data"]}
     technique_ids = technical_dict["data"]
-    
+    print(f"{file_name} 技术矩阵对应完成")
+
     # 进行文章插入
-    insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text)
-    
+    insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text, document_insert_number)
+    print(f"{file_name} 文章插入完成")
     # 进行 chunk 插入
     all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name)
-    
+    print(f"{file_name} chunk 插入完成")
     # 增加 文章 chunk 关系
     add_document_chunk_rel(source_name)
+    print(f"{file_name} 文章-chunk 关系建立完成")
     
     # 增加文章 技术关系
     add_document_tec_rel(source_name)
+    print(f"{file_name} 文章-技术关系建立完成")
     
     # 增加 es
     add_es(all_chunk_element_id)
+    print(f"{file_name} es 添加完成")
     
     return {"status": "success"}
     

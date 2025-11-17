@@ -10,7 +10,7 @@ from elasticsearch import Elasticsearch
 import requests
 from red_kbs_analyzer import RedKBSAnalyzer
 from neo4j import GraphDatabase
-from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, ES_AUTH_NAME, 
+from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_MODEL,EMBEDDING_API_KEY,ES_AUTH_NAME, 
                      ES_AUTH_PASSWORD, ES_INDEX, ES_PORT, NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER, ES_HOST, )
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
@@ -133,12 +133,12 @@ def analysis_code(extract_dir, source_name):
     
     return result
 
-def handle_json_file(data):
+def handle_json_file(data, insert_number):
     behind_uuid = str(uuid.uuid4())
     software_uuid = f"software-{behind_uuid}"
     behind_file_uuid = "file-{}-{}"
     
-    # 用户上传的和文件一样, 都是 0
+    # # 用户上传的和文件一样, 都是 0
     insert_number = 0
     
     # 先进行软件信息拼凑, embedding 信息后面再加入
@@ -252,6 +252,7 @@ def send_request_embedding(text):
     }
     # 设置请求头
     headers = {
+        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
         "Content-Type": "application/json"
     }
     try:
@@ -317,7 +318,7 @@ def add_embedding_data_to_neo4j():
                         """
                         session.run(update_query, element_id=element_id2, embedding=embeddings_list[index])
 
-def add_relateship(all_file_ids, software_uuid):
+def add_relateship(all_file_ids, software_uuid, insert_number):
     insert_number = 0
     """添加三种节点的关系：软件-文件、文件-代码片段、代码片段-技术"""
     with driver.session() as session:
@@ -428,13 +429,13 @@ def add_es(all_embedding_element_id):
             
     print(f"导入完成！成功: {success_count}, 失败: {error_count}")
 
-def handle_code(source_name, file_path, file_name, file_type, extract_dir):
+def handle_code(source_name, file_path, file_name, file_type, extract_dir, insert_number):
     result = analysis_code(extract_dir, source_name)
     
     try:
-        all_file_ids, software_uuid, all_embedding_element_id = handle_json_file(result.to_dict())
+        all_file_ids, software_uuid, all_embedding_element_id = handle_json_file(result.to_dict(), insert_number)
         add_embedding_data_to_neo4j()
-        add_relateship(all_file_ids, software_uuid)
+        add_relateship(all_file_ids, software_uuid, insert_number)
         
         # 最后添加 es
         add_es(all_embedding_element_id)        

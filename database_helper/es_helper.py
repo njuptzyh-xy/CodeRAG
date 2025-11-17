@@ -82,7 +82,8 @@ class ESHelper:
         :return:
         """
         search_query = None
-        source = f"Math.max(cosineSimilarity(params.query_vector, '{ES_VECTOR_FILED}'), 0.0)"
+        # 增加 doc[params.field].size() == 0 的判断，防止文档中不存在向量字段导致报错
+        source = f"doc[params.field].size() == 0 ? 0 : Math.max(cosineSimilarity(params.query_vector, params.field) + 1.0, 0.0)"
         if filter is not None and len(filter) > 0:
             search_query = {
                 "size": ES_VECTOR_SIZE,
@@ -91,11 +92,11 @@ class ESHelper:
                         "query": filter,
                         "script": {
                             "source": source,
-                            "params": {"query_vector": query_vector},
+                            "params": {"query_vector": query_vector, "field": ES_VECTOR_FILED},
                         },
                     }
                 },
-                "min_score": 0.5
+                "min_score": 1.5 # 由于相似度+1，min_score也需要相应调整
             }
         else:
             search_query = {
@@ -105,11 +106,11 @@ class ESHelper:
                         "query": {"match_all": {}},
                         "script": {
                             "source": source,
-                            "params": {"query_vector": query_vector}
+                            "params": {"query_vector": query_vector, "field": ES_VECTOR_FILED}
                         }
                     }
                 },
-                "min_score": 0.5
+                "min_score": 1.5 # 由于相似度+1，min_score也需要相应调整
             }
         response = self.es.search(index=ES_INDEX, body=search_query)
         normalized_results = []
@@ -125,7 +126,7 @@ class ESHelper:
                 "id": hit["_id"],
                 "source": hit["_source"],
                 "raw_score": hit["_score"],
-                "normalized_score": hit["_score"]
+                "normalized_score": hit["_score"] - 1.0 # 归一化时减去之前加的1
             }
             for hit in two_hits
         ]

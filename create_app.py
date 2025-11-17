@@ -23,7 +23,7 @@ if __name__ == '__main__':
     app = create_app()
     config = dict(
         host='0.0.0.0',
-        port=5000,
+        port=5001,
         threaded=True,
     )
     app.run(**config)

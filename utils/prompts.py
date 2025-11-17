@@ -14,7 +14,7 @@ prompts_dict = {
             "question_list": "question_result"
         }}
                 
-            请确保回复是严格有效的JSON格式，不要添加任何额外的文本。
+            请确保回复是严格有效的JSON格式，不要添加任何额外的文本。question_result为纯字符串，不要加上[]等符号
     """,
     "judge_prompt": """
             根据查询特性选择最佳检索方式：

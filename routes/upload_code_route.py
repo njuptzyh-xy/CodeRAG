@@ -15,7 +15,7 @@ def upload_code():
         # upload_code/distsat308_20250804185904
         source_name, file_path, file_name, file_type, extract_dir = save_file_and_extract(code_file)
         # 接下来进行代码处理
-        result_dict = handle_code(source_name, file_path, file_name, file_type, extract_dir)
+        result_dict = handle_code(source_name, file_path, file_name, file_type, extract_dir, "0")
         if result_dict["status"] == "error":
             return jsonify({'code': '500', 'data': [], 'message': result_dict["message"]})
         return jsonify({'code': '200', 'data': '文件上传成功', 'message': "success"})
