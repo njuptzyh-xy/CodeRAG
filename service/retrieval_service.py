@@ -153,7 +153,7 @@ class RetrievalRoute:
         return response_data["retrieval_strategy"]
     
     def hybrid_search(self):
-        final_result= []
+        final_result= [] 
         
         # 调用 es 混合搜索
         es_data = self.es.hybrid_search(self.question, self.question_embedding) 

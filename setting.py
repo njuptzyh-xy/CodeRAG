@@ -1,13 +1,13 @@
 import os
 
 # neo4j 数据库设置
-NEO4J_URI = os.getenv('NEO4J_URI', "bolt://10.3.16.60:7687")
+NEO4J_URI = os.getenv('NEO4J_URI', "bolt://10.7.7.200:7687")
 NEO4J_USER = os.getenv('NEO4J_USER', "neo4j")
 NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', "D6gkdYMp3NrDzh")
 INDEX_NAME = os.getenv('INDEX_NAME', "mitre_acttack_index")
 
 # Embedding 模型设置
-EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://10.7.7.200:29300/embed/embeddings/bgem3")
+EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://10.7.7.200:8222/embeddings/bgem3")
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', "BAAI/bge-m3")
 EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "sk-bjgqeyesmvqkyoggvgnptzkshhjheomlwktszrdfkadwpyjl")
 EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
@@ -22,10 +22,10 @@ CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 # rerank 模型设置
 RERANK_URL = os.getenv('RERANK_URL', "http://10.7.7.200:8223/rerank")
 # 上传文件切块请求 url
-UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.3.16.60:8002/submit-parse-job-from-file")
-DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.3.16.60:8002/task-status/")
+UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8002/submit-parse-job-from-file")
+DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8002/task-status/")
 # 图片识别 url
-OCR_URL = os.getenv('OCR_URL', "http://10.3.16.60/ocr-image")
+OCR_URL = os.getenv('OCR_URL', "http://10.7.7.200/ocr-image")
 
 
 

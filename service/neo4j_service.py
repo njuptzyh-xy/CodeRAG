@@ -95,27 +95,74 @@ def get_detail_by_ids(neo_ids):
             query = f"""
                 MATCH (article:MitreAttackArticleDocument)
                 WHERE elementId(article) = "{element_id}"
-                RETURN article.full_text as full_text
+                RETURN article.title as title,
+                       article.article_summary as summary,
+                       article.full_text as full_text,
+                       article.source_url as source_url,
+                       article.insert_type as insert_type,
+                       article.mitre_attack_id_list as mitre_attack_id_list,
+                       elementId(article) as article_id
             """
             with driver.session() as session:
                 result = session.run(query)
                 result_data = result.single() if result.peek() else None
-            
+
             if result_data:
                 item_full_text = result_data.get('full_text', None)
+                item_title = result_data.get('title', '无标题')
+                item_summary = result_data.get('summary', '无摘要')
+                item_source_url = result_data.get('source_url', '无URL')
+                item_insert_type = result_data.get('insert_type', '未知')
+                item_attack_ids = result_data.get('mitre_attack_id_list', [])
+                item_article_id = result_data.get('article_id', '')
             else:
                 item_full_text = ""
-            
+                item_title = "无标题"
+                item_summary = "无摘要"
+                item_source_url = "无URL"
+                item_insert_type = "未知"
+                item_attack_ids = []
+                item_article_id = element_id
+
             document_and_code_data.append({
                 'document_data': item_full_text,
-                'type': "document"
+                'type': "document",
+                'title': item_title,
+                'summary': item_summary,
+                'source_url': item_source_url,
+                'insert_type': item_insert_type,
+                'mitre_attack_ids': item_attack_ids,
+                'article_id': item_article_id
             })
         elif neo_data.get('type') == 'software':
             element_id = neo_data.get('neo_id')
+
+            # 首先获取软件的基本信息
+            software_info_query = f"""
+                MATCH (software:MitreAttackCodeSoftware)
+                WHERE elementId(software) = "{element_id}"
+                RETURN software.name as software_name,
+                       software.description as software_description,
+                       elementId(software) as software_id
+            """
+
+            software_name = "无名称"
+            software_description = "无描述"
+            software_id = element_id
+
+            with driver.session() as session:
+                software_result = session.run(software_info_query)
+                software_data = software_result.single() if software_result.peek() else None
+
+                if software_data:
+                    software_name = software_data.get('software_name', '无名称')
+                    software_description = software_data.get('software_description', '无描述')
+                    software_id = software_data.get('software_id', element_id)
+
             # 这是为了去重
             file_id_list = []
             file_id_name_dict = {}
-            # 这是 software_id, 接下来要通过 software 找文章          
+            # 这是 software_id, 接下来要通过 software 找文章
             query = f"""
                 MATCH (software:MitreAttackCodeSoftware)-[r]->(file:MitreAttackCodeSoftwareFile)
                 WHERE elementId(software) = "{element_id}"
@@ -126,9 +173,9 @@ def get_detail_by_ids(neo_ids):
                 for file_record in file_result:
                     file_id_list.append(file_record.get("file_uuid"))
                     file_id_name_dict[file_record.get("file_uuid")] = file_record.get("file_name")
-            
+
             file_id_list = list(set(file_id_list))
-            
+
             code_data = {}
             for file_item in file_id_list:
                 code_str_list = []
@@ -147,8 +194,17 @@ def get_detail_by_ids(neo_ids):
                 if code_str.strip() != "":
                     file_name = file_id_name_dict[file_item]
                     code_data[file_name] = code_str
-            
-            document_and_code_data.append(code_data) 
+
+            # 构造软件数据结构
+            software_result = {
+                'type': "software",
+                'software_name': software_name,
+                'software_description': software_description,
+                'software_id': software_id,
+                'code_files': code_data
+            }
+
+            document_and_code_data.append(software_result) 
                 
     return document_and_code_data
         
@@ -182,11 +238,11 @@ def get_articles_by_attack_id(attack_id):
     query = """
     MATCH (article:MitreAttackArticleDocument)
     WHERE $attack_id IN article.mitre_attack_id_list
-    RETURN article.title as title, 
-           article.article_summary as summary, 
+    RETURN article.title as title,
+           article.article_summary as summary,
            article.source_url as source_url
     """
-    
+
     articles = []
     with driver.session() as session:
         result = session.run(query, attack_id=attack_id)
@@ -198,15 +254,168 @@ def get_articles_by_attack_id(attack_id):
                 short_description = summary[:50] + '...' if len(summary) > 50 else summary
             else:
                 short_description = "无描述"
-                
+
             articles.append({
                 'title': record.get('title', '无标题'),
                 'description': short_description,
                 'source_url': record.get('source_url', '无URL')
             })
-    
+
     return {
         'attack_id': attack_id,
         'article_count': len(articles),
         'articles': articles
+    }
+
+
+def get_all_articles():
+    """
+    获取所有文章列表
+    返回文章数量、标题、描述（100字）和来源URL
+    """
+    query = """
+    MATCH (article:MitreAttackArticleDocument)
+    RETURN elementId(article) as article_id,
+           article.title as title,
+           article.article_summary as summary,
+           article.source_url as source_url,
+           article.insert_type as insert_type,
+           article.mitre_attack_id_list as mitre_attack_id_list
+    ORDER BY article.title
+    """
+
+    articles = []
+    with driver.session() as session:
+        result = session.run(query)
+        for record in result:
+            # 处理描述，截取前100个字
+            summary = record.get('summary', '')
+            if summary:
+                # 简单截取前100个字符作为描述
+                short_description = summary[:100] + '...' if len(summary) > 100 else summary
+            else:
+                short_description = "无描述"
+
+            # 获取MITRE ATT&CK ID列表
+            attack_ids = record.get('mitre_attack_id_list', [])
+            if not attack_ids:
+                attack_ids = []
+
+            articles.append({
+                'article_id': record.get('article_id', ''),
+                'title': record.get('title', '无标题'),
+                'description': short_description,
+                'source_url': record.get('source_url', '无URL'),
+                'insert_type': record.get('insert_type', '未知'),
+                'mitre_attack_ids': attack_ids
+            })
+
+    return {
+        'article_count': len(articles),
+        'articles': articles
+    }
+
+
+def get_all_software():
+    """
+    获取所有软件列表
+    返回软件数量、名称、描述和相关信息
+    """
+    query = """
+    MATCH (software:MitreAttackCodeSoftware)
+    RETURN elementId(software) as software_id,
+           software.name as name,
+           software.description as description
+    ORDER BY software.name
+    """
+
+    software_list = []
+    with driver.session() as session:
+        result = session.run(query)
+        for record in result:
+            # 处理描述，截取前200个字
+            description = record.get('description', '')
+            if description:
+                # 简单截取前200个字符作为描述
+                short_description = description[:200] + '...' if len(description) > 200 else description
+            else:
+                short_description = "无描述"
+
+            software_list.append({
+                'software_id': record.get('software_id', ''),
+                'name': record.get('name', '无名称'),
+                'description': short_description
+            })
+
+    return {
+        'software_count': len(software_list),
+        'software': software_list
+    }
+
+
+def get_software_techniques_tactics(software_id):
+    """
+    获取软件相关的战术和技术信息
+    返回软件使用的ATT&CK技术和所属战术
+    """
+    query = """
+    MATCH (software:MitreAttackCodeSoftware)-[r1*1..2]->(tech:MitreAttackTechnique)
+    WHERE elementId(software) = $software_id
+    OPTIONAL MATCH (tech)-[r2:MitreAttackTechniqueSubtechniqueOf]->(tactic:MitreAttackTactic)
+    RETURN DISTINCT
+           elementId(tech) as technique_id,
+           tech.name as technique_name,
+           tech.description as technique_description,
+           tech.attack_id as technique_attack_id,
+           elementId(tactic) as tactic_id,
+           tactic.name as tactic_name,
+           tactic.description as tactic_description,
+           tactic.attack_id as tactic_attack_id,
+           tactic.attack_shortname as tactic_shortname
+    ORDER BY tactic_name, technique_name
+    """
+
+    tactics_dict = {}
+    with driver.session() as session:
+        result = session.run(query, software_id=software_id)
+        for record in result:
+            tactic_id = record.get('tactic_id', '')
+            tactic_name = record.get('tactic_name', '未知战术')
+            tactic_description = record.get('tactic_description', '无描述')
+            tactic_attack_id = record.get('tactic_attack_id', '')
+            tactic_shortname = record.get('tactic_shortname', '')
+
+            technique_info = {
+                'technique_id': record.get('technique_id', ''),
+                'technique_name': record.get('technique_name', '未知技术'),
+                'technique_description': record.get('technique_description', '无描述'),
+                'technique_attack_id': record.get('technique_attack_id', '')
+            }
+
+            # 如果战术不存在，创建新战术
+            if tactic_id not in tactics_dict:
+                tactics_dict[tactic_id] = {
+                    'tactic_id': tactic_id,
+                    'tactic_name': tactic_name,
+                    'tactic_description': tactic_description,
+                    'tactic_attack_id': tactic_attack_id,
+                    'tactic_shortname': tactic_shortname,
+                    'techniques': []
+                }
+
+            # 添加技术到战术中（避免重复）
+            technique_exists = any(
+                tech['technique_id'] == technique_info['technique_id']
+                for tech in tactics_dict[tactic_id]['techniques']
+            )
+            if not technique_exists:
+                tactics_dict[tactic_id]['techniques'].append(technique_info)
+
+    # 转换为列表格式
+    tactics_list = list(tactics_dict.values())
+
+    return {
+        'software_id': software_id,
+        'tactics_count': len(tactics_list),
+        'tactics': tactics_list
     }
