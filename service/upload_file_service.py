@@ -617,7 +617,7 @@ def save_file(file):
     
     # 查看文件类型,除了固定文件类型,其他文件类型都不处理
     file_type = file_name.split('.')[-1]
-    if file_type not in ['pdf', 'docx', 'doc', 'txt', 'md']:
+    if file_type not in ['pdf', 'docx', 'doc', 'txt', 'md', 'pptx', 'jpg', 'png', 'xlsx']:
         raise ValueError(f"不支持的文件类型: {file_type}")
     
     # 生成时间字符串
