@@ -10,6 +10,10 @@ batch_import.py batch_import_code.py
 在settings.py中设置数据库连接信息，使用red-team-rag的conda 环境
 > python batch_import.py
 
+启动迁移脚本命令：
+需要创建集合(collection)就携带--recreate-collection ，不需要创建不用携带
+python es_to_milvus_migrator.py --recreate-collection 
+
 > python batch_import_code.py
 
 ## 验证数据

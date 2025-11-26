@@ -1,4 +1,5 @@
 from neo4j import GraphDatabase
+from neo4j.time import Date, DateTime, Duration, Time
 from setting import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NODE_RETURN_FIELDS
 
 
@@ -15,6 +16,18 @@ class Neo4jHelper:
             print(f"Authentication failed: {e}")
             return None
     
+    def _serialize_value(self, value):
+        """Recursively convert Neo4j temporal objects into JSON-safe values."""
+        if isinstance(value, (DateTime, Date, Time)):
+            return value.isoformat()
+        if isinstance(value, Duration):
+            return str(value)
+        if isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._serialize_value(val) for key, val in value.items()}
+        return value
+
     def get_single_point_data(self, neo_id, node_type=None):
         """
         根据element_id查询节点，并动态指定返回字段
@@ -76,9 +89,11 @@ class Neo4jHelper:
             if search_data_record:
                 if return_fields != "all":
                     for field_item in return_fields:
-                        return_dict[field_item] = search_data_record.get(field_item)
+                        field_value = search_data_record.get(field_item)
+                        return_dict[field_item] = self._serialize_value(field_value)
                 else:
-                   return_dict.update(search_data_record.data()["n"])  # 核心修改
+                    node_data = dict(search_data_record.data()["n"])
+                    return_dict.update(self._serialize_value(node_data))  # 核心修改
                 return_dict["node_label"] = node_type
         
         return return_dict

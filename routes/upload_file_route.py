@@ -9,6 +9,8 @@ upload_file_route = Blueprint('upload_file_route', __name__)
 def upload_file():
     file = request.files['file']
     if file:
+        # source_name: 上传批次或来源标识; file_path: 服务器上临时保存的完整路径;
+        # file_name: 原始文件名; file_type: 文件扩展名/类型，用于后续切分流程
         source_name, file_path, file_name, file_type = save_file(file)
         
         # 接下来进行文件处理

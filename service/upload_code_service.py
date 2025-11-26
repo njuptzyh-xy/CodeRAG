@@ -6,20 +6,44 @@ import zipfile
 import py7zr
 import pathlib
 from datetime import datetime
-from elasticsearch import Elasticsearch
 import requests
 from red_kbs_analyzer import RedKBSAnalyzer
 from neo4j import GraphDatabase
-from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_MODEL,EMBEDDING_API_KEY,ES_AUTH_NAME, 
-                     ES_AUTH_PASSWORD, ES_INDEX, ES_PORT, NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER, ES_HOST, )
+from pymilvus import (
+    connections,
+    Collection,
+    CollectionSchema,
+    FieldSchema,
+    DataType,
+    Function,
+    FunctionType,
+    utility,
+)
+from pymilvus.exceptions import MilvusException
+from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_MODEL, EMBEDDING_API_KEY,
+                     NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER,
+                     MILVUS_HOST, MILVUS_PORT, MILVUS_USER, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION, MILVUS_CONSISTENCY_LEVEL, MILVUS_SECURE)
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
-es = Elasticsearch(
-                hosts=[{"host": ES_HOST, "port": ES_PORT, "scheme": "http"}],
-                basic_auth=(ES_AUTH_NAME, ES_AUTH_PASSWORD),
-            )
+# 连接 Milvus - 改进错误处理
+milvus_connected = False
+try:
+    connections.connect(
+        alias="default",
+        host=MILVUS_HOST,
+        port=str(MILVUS_PORT),
+        user=MILVUS_USER,
+        password=MILVUS_PASSWORD,
+        db_name=MILVUS_DB_NAME,
+        secure=MILVUS_SECURE,
+    )
+    milvus_connected = True
+    print(f"Milvus 连接成功: {MILVUS_HOST}:{MILVUS_PORT}")
+except Exception as e:
+    print(f"Milvus 连接失败: {e}")
+    print(f"连接参数: host={MILVUS_HOST}, port={MILVUS_PORT}, user={MILVUS_USER}, db={MILVUS_DB_NAME}")
 
 def get_filename_without_extension(file_path):
     """获取文件名（不含扩展名），特殊处理 .tar.gz"""
@@ -383,7 +407,197 @@ def add_relateship(all_file_ids, software_uuid, insert_number):
                 ON CREATE SET r2.insert_number = $insert_number
                 """
                 session.run(merge_software_tactic_query, software_uuid=software_uuid, tactic_id=tactic_id, insert_number=insert_number)
-def add_es(all_embedding_element_id):
+
+def _ensure_milvus_collection():
+    """确保 Milvus collection 存在，如果不存在则创建"""
+    if not milvus_connected:
+        raise RuntimeError("Milvus 未连接，无法创建 collection")
+    
+    collection_name = MILVUS_COLLECTION
+    vector_dim = 1024  # 根据用户要求，向量维度为 1024
+    
+    # 检查 collection 是否存在
+    try:
+        has_collection = utility.has_collection(collection_name)
+    except Exception as e:
+        print(f"检查 collection 是否存在时出错: {e}")
+        raise
+    
+    if not has_collection:
+        print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
+        
+        try:
+            # 定义字段
+            fields = [
+                FieldSchema(
+                    name="neo4j_id",
+                    dtype=DataType.VARCHAR,
+                    is_primary=True,
+                    auto_id=False,
+                    max_length=128,
+                ),
+                FieldSchema(
+                    name="description",
+                    dtype=DataType.VARCHAR,
+                    max_length=65535,
+                    enable_analyzer=True,
+                    analyzer_params={
+                        "tokenizer": "jieba",  # 中英文分词
+                        "filter": ["lowercase"],
+                    },
+                ),
+                FieldSchema(
+                    name="description_embedding",
+                    dtype=DataType.FLOAT_VECTOR,
+                    dim=vector_dim,
+                ),
+                FieldSchema(
+                    name="sparse_vector",
+                    dtype=DataType.SPARSE_FLOAT_VECTOR,
+                ),
+            ]
+            
+            # 创建 BM25 函数，将 description 字段转换为稀疏向量
+            bm25_function = Function(
+                name="description_bm25",
+                input_field_names=["description"],
+                output_field_names=["sparse_vector"],
+                function_type=FunctionType.BM25,
+            )
+            
+            # 创建 schema
+            schema = CollectionSchema(
+                fields=fields,
+                functions=[bm25_function],
+                description="Collection for storing document chunks with embeddings",
+            )
+            
+            # 创建 collection
+            collection = Collection(
+                name=collection_name,
+                schema=schema,
+                consistency_level=MILVUS_CONSISTENCY_LEVEL,
+            )
+            print(f"Collection {collection_name} 创建成功")
+            
+            # 创建索引
+            try:
+                # 为稠密向量创建索引
+                collection.create_index(
+                    field_name="description_embedding",
+                    index_params={
+                        "index_type": "FLAT",
+                        "metric_type": "COSINE",
+                    },
+                )
+                print(f"为 collection {collection_name} 的向量字段创建索引完成")
+            except MilvusException as exc:
+                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                    print(f"创建向量字段索引时出错: {exc}")
+                    raise
+            
+            try:
+                # 为稀疏向量创建索引
+                collection.create_index(
+                    field_name="sparse_vector",
+                    index_params={
+                        "index_type": "SPARSE_INVERTED_INDEX",
+                        "metric_type": "BM25",
+                    },
+                )
+                print(f"为 collection {collection_name} 的稀疏向量字段创建索引完成")
+            except MilvusException as exc:
+                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                    print(f"创建稀疏向量字段索引时出错: {exc}")
+                    raise
+            
+            # 加载 collection
+            collection.load()
+            print(f"Milvus collection {collection_name} 创建并加载完成")
+            
+            # 验证 collection 是否真的存在
+            if utility.has_collection(collection_name):
+                print(f"✓ 验证成功: collection {collection_name} 已存在")
+            else:
+                raise RuntimeError(f"Collection {collection_name} 创建失败，验证时不存在")
+                
+        except Exception as e:
+            print(f"创建 collection {collection_name} 时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    else:
+        collection = Collection(name=collection_name)
+        # 检查并创建缺失的索引
+        try:
+            index_info = collection.indexes
+        except Exception as e:
+            print(f"获取 collection 索引信息时出错: {e}")
+            index_info = []
+            
+        vector_has_index = any(
+            idx.field_name == "description_embedding" for idx in index_info
+        )
+        sparse_has_index = any(
+            idx.field_name == "sparse_vector" for idx in index_info
+        )
+        
+        # 如果需要创建索引，先释放 collection
+        need_reload = False
+        if not vector_has_index or not sparse_has_index:
+            try:
+                collection.release()
+            except Exception:
+                pass  # 如果未加载，忽略异常
+        
+        if not vector_has_index:
+            try:
+                collection.create_index(
+                    field_name="description_embedding",
+                    index_params={
+                        "index_type": "FLAT",
+                        "metric_type": "COSINE",
+                    },
+                )
+                print(f"为 collection {collection_name} 的向量字段创建索引完成")
+                need_reload = True
+            except MilvusException as exc:
+                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                    print(f"创建向量字段索引时出错: {exc}")
+        
+        if not sparse_has_index:
+            try:
+                collection.create_index(
+                    field_name="sparse_vector",
+                    index_params={
+                        "index_type": "SPARSE_INVERTED_INDEX",
+                        "metric_type": "BM25",
+                    },
+                )
+                print(f"为 collection {collection_name} 的稀疏向量字段创建索引完成")
+                need_reload = True
+            except MilvusException as exc:
+                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                    print(f"创建稀疏向量字段索引时出错: {exc}")
+        
+        # 确保 collection 已加载
+        if need_reload:
+            collection.load()
+        else:
+            try:
+                collection.load()
+            except Exception:
+                pass  # 如果已经加载，忽略异常
+        print(f"Milvus collection {collection_name} 已存在")
+    
+    return collection
+
+def add_milvus(all_embedding_element_id):
+    """将数据添加到 Milvus 向量数据库"""
+    if not milvus_connected:
+        print("错误: Milvus 未连接，无法插入数据")
+        return
+    
     # 查询指定 ID 的 BaseEntity 节点
     query = """
     UNWIND $element_ids AS element_id
@@ -392,42 +606,112 @@ def add_es(all_embedding_element_id):
     RETURN elementId(n) as element_id, n.description as description, n.description_embedding as description_embedding
     """
     
-    with driver.session() as session:
-        result = session.run(query, element_ids=all_embedding_element_id)
-        all_records = list(result)
+    try:
+        with driver.session() as session:
+            result = session.run(query, element_ids=all_embedding_element_id)
+            all_records = list(result)
+    except Exception as e:
+        print(f"从 Neo4j 查询数据失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    if not all_records:
+        print("没有找到需要导入的记录")
+        return
+    
+    print(f"从 Neo4j 查询到 {len(all_records)} 条记录")
+    
+    # 确保 collection 存在
+    try:
+        collection = _ensure_milvus_collection()
+    except Exception as e:
+        print(f"确保 collection 存在时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return
     
     success_count = 0
     error_count = 0
-    index_name = ES_INDEX
     
-    # 开始插入数据
+    # 准备批量插入的数据
+    neo4j_ids = []
+    descriptions = []
+    embeddings = []
+    
     for record in all_records:
         try:
-            # 准备文档数据
-            doc = {
-                "neo4j_id": record["element_id"],
-                "description": record["description"],
-                "description_embedding": record["description_embedding"]
-            }
+            neo4j_id = str(record["element_id"])
+            description = record["description"]
+            embedding = record["description_embedding"]
             
-            # 将文档索引到 ES
-            response = es.index(
-                index=index_name,
-                document=doc,
-                id=record["element_id"]  # 使用 neo4j 的 ID 作为文档 ID
-            )
+            # 验证数据
+            if not neo4j_id or not description or not embedding:
+                error_count += 1
+                print(f"跳过记录 {neo4j_id}: 数据不完整")
+                continue
             
-            success_count += 1
+            # 验证向量维度
+            if not isinstance(embedding, list):
+                error_count += 1
+                print(f"跳过记录 {neo4j_id}: 向量不是列表类型")
+                continue
+                
+            actual_dim = len(embedding)
+            if actual_dim != 1024:
+                error_count += 1
+                print(f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 1024, 实际 {actual_dim})")
+                continue
+            
+            neo4j_ids.append(neo4j_id)
+            descriptions.append(description)
+            embeddings.append(embedding)
+            
+        except Exception as e:
+            error_count += 1
+            print(f"处理记录失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"准备插入 {len(neo4j_ids)} 条有效记录")
+    
+    # 批量插入数据
+    if neo4j_ids:
+        try:
+            # 确保字段顺序与 schema 定义一致: neo4j_id, description, description_embedding
+            entities = [neo4j_ids, descriptions, embeddings]
+            print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
+            result = collection.upsert(entities)
+            print(f"Upsert 返回结果: {result}")
+            success_count = len(neo4j_ids)
             
             # 每100条打印一次进度
             if success_count % 100 == 0:
                 print(f"已成功导入{success_count}条记录...")
-                
-        except Exception as e:
-            error_count += 1
-            print(f"导入记录失败: {str(e)}")
             
-    print(f"导入完成！成功: {success_count}, 失败: {error_count}")
+            # 验证插入是否成功 - 查询 collection 中的记录数
+            try:
+                collection.flush()  # 确保数据被持久化
+                num_entities = collection.num_entities
+                print(f"Collection {MILVUS_COLLECTION} 当前包含 {num_entities} 条记录")
+            except Exception as e:
+                print(f"查询 collection 记录数时出错: {e}")
+            
+            print(f"导入完成！成功: {success_count}, 失败: {error_count}")
+        except MilvusException as e:
+            print(f"Milvus 批量插入失败: {str(e)}")
+            print(f"错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            error_count += len(neo4j_ids)
+        except Exception as e:
+            print(f"插入数据时发生未知错误: {str(e)}")
+            print(f"错误类型: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            error_count += len(neo4j_ids)
+    else:
+        print("没有有效数据需要导入")
 
 def handle_code(source_name, file_path, file_name, file_type, extract_dir, insert_number):
     result = analysis_code(extract_dir, source_name)
@@ -437,8 +721,8 @@ def handle_code(source_name, file_path, file_name, file_type, extract_dir, inser
         add_embedding_data_to_neo4j()
         add_relateship(all_file_ids, software_uuid, insert_number)
         
-        # 最后添加 es
-        add_es(all_embedding_element_id)        
+        # 最后添加 milvus
+        add_milvus(all_embedding_element_id)        
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -4,3 +4,8 @@
 .history/
 *.log
 upload_file
+upload_code
+docs
+.vscode
+debug_milvus_description.py
+check_es_metadata_size.py

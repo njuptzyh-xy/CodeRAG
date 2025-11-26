@@ -22,8 +22,8 @@ CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 # rerank 模型设置
 RERANK_URL = os.getenv('RERANK_URL', "http://10.7.7.200:8223/rerank")
 # 上传文件切块请求 url
-UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8002/submit-parse-job-from-file")
-DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8002/task-status/")
+UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8004/submit-parse-job-from-file")
+DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8004/task-status/")
 # 图片识别 url
 OCR_URL = os.getenv('OCR_URL', "http://10.7.7.200/ocr-image")
 
@@ -63,3 +63,12 @@ NODE_RETURN_FIELDS = {
     "MitreAttackTactic": ["attack_id", "attack_shortname", "description", "name", "ref_url"],
     "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url"]
 }
+# ====== Milvus 配置 ==================
+MILVUS_HOST = os.getenv("MILVUS_HOST", "10.1.1.140")
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
+MILVUS_USER = os.getenv("MILVUS_USER", "root")
+MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
+MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
+MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "es_migration")
+MILVUS_CONSISTENCY_LEVEL = os.getenv("MILVUS_CONSISTENCY_LEVEL", "Bounded")
+MILVUS_SECURE = os.getenv("MILVUS_SECURE", "false").lower() == "true"

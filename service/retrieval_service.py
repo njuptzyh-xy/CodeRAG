@@ -63,9 +63,9 @@ class RetrievalRoute:
         self.question = question                                               # 问题
         self.question_embedding = self._get_question_embedding()               # 问题向量
         self.strategy_dict = {                                                 # 策略字典
-            "hybrid_search": self.hybrid_search,
-            "graph_search": self.graph_search,
-            "vector_expansion": self.vector_expansion_search
+            "hybrid_search": self.hybrid_search, # 混合检索  全文+向量融合检索  适合问题里含具体实体、需要语义理解的场景
+            "graph_search": self.graph_search, # 图谱检索  通过图谱查询  暂时未实现
+            "vector_expansion": self.vector_expansion_search # 向量扩展  通过向量扩展查询  适合问题里没有具体实体、需要语义理解的场景 兜底策略
         }
         
     def _get_question_embedding(self):
@@ -160,9 +160,14 @@ class RetrievalRoute:
         
         # 接下来进行 neo4j 的数据收集和返回
         for es_item in es_data:
-            es_item_neo4j_id = es_item["source"]["neo4j_id"]
-            final_result.append(self.neo4j_drive.get_single_point_data(es_item_neo4j_id))            
-        print("============================\n", final_result)
+            es_item_neo4j_id = es_item["source"].get("neo4j_id")
+            if not es_item_neo4j_id:
+                print(f"警告: 跳过缺失 neo4j_id 的结果: {es_item}")
+                continue
+            node_data = self.neo4j_drive.get_single_point_data(es_item_neo4j_id)
+            if node_data:  # 添加空值检查
+                final_result.append(node_data)
+        # print("============================\n", final_result)
         return final_result
 
     def vector_expansion_search(self):
@@ -180,7 +185,8 @@ class RetrievalRoute:
             # 重排结果进行梳理，将这几个结点 id 进行整理
             neo4j_id_list = []
             for rank_index in rank_index_result_list:
-                neo4j_id_list.append(es_data[rank_index].get("id"))
+                # neo4j_id_list.append(es_data[rank_index].get("id"))
+                neo4j_id_list.append(es_data[rank_index].get("source", {}).get("neo4j_id"))
             
             # 整理好的 id 进行 延伸查询
             neo4j_search_result = self.neo4j_drive.expansion_search(neo4j_id_list)
