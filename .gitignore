@@ -9,3 +9,10 @@ docs
 .vscode
 debug_milvus_description.py
 check_es_metadata_size.py
+=2.3.0
+=2.3.0,
+config_files.bak/
+config_files/
+neo4j_data/
+neo4j_data.bak/
+skipped_ids.txt

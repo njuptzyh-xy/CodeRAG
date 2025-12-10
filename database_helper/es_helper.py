@@ -81,7 +81,11 @@ class ESHelper:
                 partition_names=self.partition_names,
                 output_fields=self.output_fields,
             )
-            return results[0] if results else []
+            # 修复：直接返回 Hits 对象，让 _format_hits 处理转换
+            # 在 Python 3.13 中，Hits 对象可能不能直接转换为列表，需要在 _format_hits 中处理
+            if results and len(results) > 0:
+                return results[0]
+            return []
         except MilvusException as exc:
             print(f"Milvus hybrid_search 失败: {exc}")
         except Exception as exc:  # noqa: BLE001
@@ -93,19 +97,55 @@ class ESHelper:
         if not hits:
             return []
 
-        max_score = max((hit.score or 0.0) for hit in hits) or 1.0
+        # 修复：处理 pymilvus Hits 对象（兼容 Python 3.13）
+        # 直接迭代 Hits 对象，不先转换为列表，避免 SequenceIterator 问题
         formatted = []
-        for hit in hits:
-            raw_score = float(hit.score or 0.0)
-            normalized = raw_score / max_score if max_score else 0.0
-            formatted.append(
-                {
+        hit_scores = []
+        
+        try:
+            # 第一遍迭代：收集所有 hit 对象和分数
+            for hit in hits:
+                formatted.append({
                     "id": str(hit.id),
                     "source": self._extract_source(hit),
-                    "raw_score": raw_score,
-                    "normalized_score": normalized,
-                }
-            )
+                    "raw_score": float(hit.score or 0.0),
+                    "normalized_score": 0.0,  # 先设为0，后面再计算
+                })
+                hit_scores.append(float(hit.score or 0.0))
+        except (TypeError, ValueError) as e:
+            # 如果直接迭代失败，尝试其他方法
+            print(f"直接迭代 hits 失败: {type(hits)}, 错误: {e}")
+            try:
+                # 尝试访问 Hits 对象的内部属性
+                if hasattr(hits, 'hits'):
+                    hits_iter = hits.hits
+                elif hasattr(hits, '_hits'):
+                    hits_iter = hits._hits
+                else:
+                    print(f"无法找到 hits 对象的可迭代属性: {type(hits)}")
+                    return []
+                
+                # 迭代内部属性
+                for hit in hits_iter:
+                    formatted.append({
+                        "id": str(hit.id),
+                        "source": self._extract_source(hit),
+                        "raw_score": float(hit.score or 0.0),
+                        "normalized_score": 0.0,
+                    })
+                    hit_scores.append(float(hit.score or 0.0))
+            except Exception as e2:
+                print(f"所有迭代方法都失败: {type(hits)}, 错误: {e2}")
+                return []
+        
+        if not formatted:
+            return []
+        
+        # 计算归一化分数
+        max_score = max(hit_scores) if hit_scores else 1.0
+        for i, item in enumerate(formatted):
+            item["normalized_score"] = item["raw_score"] / max_score if max_score else 0.0
+        
         return formatted
 
     def _extract_source(self, hit) -> Dict[str, Any]:
@@ -114,26 +154,41 @@ class ESHelper:
         
         # 首先尝试从 entity 获取数据
         entity = getattr(hit, "entity", None)
-        if entity is not None:
-            try:
+        # print("entity=================\n", entity)
+        # print("hit=================\n", hit)
+        try:
+            if entity is not None:
                 entity_dict = entity.to_dict()
                 if isinstance(entity_dict, dict):
+                    # 先平铺顶层
                     payload.update(entity_dict)
-                    
-                    # 部分 pymilvus 版本会将字段嵌套在 entity 下，需要展开保证上层取到 description
+
+                    # 兜底嵌套的 entity
                     nested_entity = entity_dict.get("entity")
                     if isinstance(nested_entity, dict):
-                        payload.setdefault(
-                            "description",
-                            nested_entity.get("description", "")
-                        )
-                        # 如果嵌套结构里有 neo4j_id，同样兜底
-                        payload.setdefault(
-                            "neo4j_id",
-                            nested_entity.get("neo4j_id", "")
-                        )
-            except Exception as e:  # noqa: BLE001
-                print(f"从 entity 提取数据失败: {e}")
+                        if nested_entity.get("description") is not None:
+                            payload["description"] = nested_entity.get("description", "")
+                        payload.setdefault("neo4j_id", nested_entity.get("neo4j_id", ""))
+
+                    # 顶层已有 description 则写入（避免被前面的平铺覆盖为 None）
+                    if entity_dict.get("description") is not None:
+                        payload["description"] = entity_dict.get("description", "")
+
+                    # 不需要把嵌套 entity 透传出去
+                    payload.pop("entity", None)
+
+            # 有些版本字段可能在 hit.fields 中
+            fields = getattr(hit, "fields", None)
+            if isinstance(fields, dict):
+                if fields.get("description") is not None:
+                    payload["description"] = fields.get("description", "")
+                payload.setdefault("neo4j_id", fields.get("neo4j_id", ""))
+
+            # 调试查看最终返回的 payload
+            # print("payload_extracted=================\n", payload)
+
+        except Exception as e:  # noqa: BLE001
+            print(f"从 entity 提取数据失败: {e}")
         
         # 确保至少包含 neo4j_id（优先使用 entity 中的，否则使用 hit.id）
         if "neo4j_id" not in payload:

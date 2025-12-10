@@ -26,6 +26,7 @@ from pymilvus import (
 from pymilvus.exceptions import MilvusException
 
 import setting
+from database_helper.neo4j_helper import Neo4jHelper
 
 LOGGER = logging.getLogger("es_to_milvus")
 DEFAULT_BATCH_SIZE = 100
@@ -49,6 +50,7 @@ class ESMilvusMigrator:
         dry_run: bool = False,
         skipped_output: Optional[str] = None,
         recreate_collection: bool = False,
+        resolve_neo4j_id: bool = False,
     ) -> None:
         self.batch_size = batch_size
         self.collection_name = collection_name
@@ -60,8 +62,10 @@ class ESMilvusMigrator:
         self.skipped_output = skipped_output
         self.skipped_ids: List[str] = []
         self.recreate_collection = recreate_collection
+        self.resolve_neo4j_id = resolve_neo4j_id
 
         self.es = self._build_es_client()
+        self.neo4j_helper = Neo4jHelper() if self.resolve_neo4j_id else None
         self._connect_milvus()
         self.collection = self._ensure_collection()
 
@@ -447,6 +451,13 @@ class ESMilvusMigrator:
             if not isinstance(description, str):
                 description = "" if description is None else str(description)
 
+            if self.resolve_neo4j_id:
+                resolved_id = self._resolve_element_id(description, primary_id)
+                if not resolved_id:
+                    self.skipped_ids.append(str(doc.get("_id", "unknown")))
+                    continue
+                primary_id = resolved_id
+
             ids.append(primary_id)
             descriptions.append(description)
             vectors.append(vector)
@@ -455,6 +466,23 @@ class ESMilvusMigrator:
             return None
 
         return [ids, descriptions, vectors]
+
+    def _resolve_element_id(self, description: str, fallback_id: Optional[str]) -> Optional[str]:
+        """
+        根据 description 到 Neo4j 查询最新的 elementId，用于替换失效的 neo4j_id。
+        """
+        if not self.neo4j_helper or not description:
+            return fallback_id
+        
+        node_data = self.neo4j_helper.get_node_by_description(description)
+        element_id = node_data.get("element_id") if node_data else None
+        if element_id:
+            return element_id
+        LOGGER.warning(
+            "无法通过 description 匹配到 Neo4j 节点，保留原始 ID。description 摘要: %s",
+            description[:80]
+        )
+        return fallback_id
 
     def _write_skipped_ids(self) -> None:
         if not self.skipped_output:
@@ -531,6 +559,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="如果 collection 已存在则先删除再重建，以确保 BM25 配置完整。",
     )
+    parser.add_argument(
+        "--resolve-neo4j-id",
+        action="store_true",
+        help="迁移时根据 description 从 Neo4j 查询最新 elementId，替换失效的 neo4j_id。",
+    )
     return parser.parse_args()
 
 
@@ -550,6 +583,7 @@ def main() -> None:
         dry_run=args.dry_run,
         skipped_output=args.skipped_output,
         recreate_collection=args.recreate_collection,
+        resolve_neo4j_id=args.resolve_neo4j_id,
     )
     migrator.migrate()
 

@@ -12,8 +12,9 @@ def query():
         return jsonify({'code': '400', 'data': [], 'message': '请输入问题'})
     
     # 非流式响应处理
-    try:
-        answer = query_graphrag(question)
-        return jsonify({'code': '200', 'data': answer, 'message': "success"})
-    except Exception as e:
-        return jsonify({'code': '500', 'data': [], 'message': f'处理请求时出错: {str(e)}'})
+    # try:
+    answer = query_graphrag(question)
+    return jsonify({'code': '200', 'data': answer, 'message': "success"})
+    # except Exception as e:
+    #     print("运行报错")
+    #     return jsonify({'code': '500', 'data': [], 'message': f'处理请求时出错: {str(e)}'})

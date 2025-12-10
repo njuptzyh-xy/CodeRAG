@@ -97,6 +97,42 @@ class Neo4jHelper:
                 return_dict["node_label"] = node_type
         
         return return_dict
+
+    def get_node_by_description(self, description: str):
+        """
+        通过 description 精确查找节点，返回节点字段、标签及 elementId。
+        """
+        if not description:
+            return {}
+        
+        query = """
+            MATCH (n:BaseEntity)
+            WHERE n.description = $description
+            RETURN n, labels(n) AS nodeLabels, elementId(n) AS element_id
+            LIMIT 1
+        """
+        
+        with self.neo4j_driver.session() as session:
+            result = session.run(query, description=description)
+            record = result.single()
+            if not record:
+                return {}
+            
+            node = record.get("n")
+            node_labels = record.get("nodeLabels") or []
+            element_id = record.get("element_id")
+            
+            node_type = None
+            for label in node_labels:
+                if label != "BaseEntity":
+                    node_type = label
+                    break
+            
+            node_data = dict(node)
+            serialized = self._serialize_value(node_data)
+            serialized["node_label"] = node_type
+            serialized["element_id"] = element_id
+            return serialized
     
     def get_one_hop_neighbors(self, node_id: str):
         """

@@ -114,6 +114,9 @@ class RetrievalRoute:
             "Content-Type": "application/json"
         }
         
+        # print("=================\n", self.question)
+        # print("=================\n", documents)
+        # print("=================\n", top_k)
         payload = {
             "query": self.question,
             "documents": documents,
@@ -179,7 +182,9 @@ class RetrievalRoute:
         es_data = self.es.search_by_calculate_similarity(question_embedding_data)
         if len(es_data) > 0:
             # 进行重排模型重排
+            # print("es_data=================\n", es_data)
             neo4j_description_list = [es_data_item.get("source").get("description") for es_data_item in es_data]
+            # print("neo4j_description_list=================\n", neo4j_description_list)
             rank_index_result_list = self.send_rerank_request(neo4j_description_list, top_k=3)
             
             # 重排结果进行梳理，将这几个结点 id 进行整理

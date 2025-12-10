@@ -64,7 +64,7 @@ NODE_RETURN_FIELDS = {
     "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url"]
 }
 # ====== Milvus 配置 ==================
-MILVUS_HOST = os.getenv("MILVUS_HOST", "10.1.1.140")
+MILVUS_HOST = os.getenv("MILVUS_HOST", "10.7.7.200")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
 MILVUS_USER = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
