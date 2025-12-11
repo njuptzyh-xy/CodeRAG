@@ -5,6 +5,7 @@ import tarfile
 import zipfile
 import py7zr
 import pathlib
+from red_kbs_analyzer.run_logs.logger import logger
 from datetime import datetime
 import requests
 from red_kbs_analyzer import RedKBSAnalyzer
@@ -20,7 +21,7 @@ from pymilvus import (
     utility,
 )
 from pymilvus.exceptions import MilvusException
-from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_MODEL, EMBEDDING_API_KEY,
+from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_API_KEY,
                      NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER,
                      MILVUS_HOST, MILVUS_PORT, MILVUS_USER, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION, MILVUS_CONSISTENCY_LEVEL, MILVUS_SECURE)
 
@@ -162,12 +163,14 @@ def handle_json_file(data, insert_number):
     software_uuid = f"software-{behind_uuid}"
     behind_file_uuid = "file-{}-{}"
     
+    logger.info(f"[handle_json_file] 开始处理上传 JSON，生成软件 UUID={software_uuid}")
     # # 用户上传的和文件一样, 都是 0
     insert_number = 0
     
     # 先进行软件信息拼凑, embedding 信息后面再加入
     software_name = data["software_name"]
     software_description = data["software_summary"]
+    logger.info(f"[handle_json_file] 软件名称={software_name}，描述长度={len(software_description) if software_description else 0}")
     
     # 拿取 tactic 列表
     # tactics_id_list = []
@@ -180,6 +183,7 @@ def handle_json_file(data, insert_number):
             # tactics_id_list.append({"tactic_id": single_tactic.get("tactic_id"), 
             #                         "tactic_evidence": single_tactic.get("evidence")})
             tactics_id_list2.append(single_tactic.get("tactic_id"))
+    logger.info(f"[handle_json_file] 收到 {len(tactics_id_list2)} 个战术 ID: {tactics_id_list2}")
     
     # 插入 mitre_attack_code_software 节点
     with driver.session() as session:
@@ -197,6 +201,7 @@ def handle_json_file(data, insert_number):
                     software_description=software_description, tactic_id_list=tactics_id_list2, 
                     insert_number=insert_number)
         software_element_id = result.single()["software_element_id"]
+    logger.info(f"[handle_json_file] 完成软件节点 MERGE，elementId={software_element_id}")
         
     # 拿取 code_files 需要的数据
     # 获取所有 file 的 uuid
@@ -206,11 +211,13 @@ def handle_json_file(data, insert_number):
     
     software_files_data = data.get("software_files")
     if software_files_data:
+        logger.info(f"[handle_json_file] 开始处理 {len(software_files_data)} 个文件")
         index = 0
         for single_file in software_files_data:
             file_name = single_file.get("file_name")
             file_uuid = behind_file_uuid.format(behind_uuid, index)
             all_file_ids.append(file_uuid)
+            logger.info(f"[handle_json_file] 处理文件[{index}] name={file_name} uuid={file_uuid}")
             with driver.session() as session:
                 merge_file_query = """
                 MERGE (file:MitreAttackCodeSoftwareFile {file_uuid: $file_uuid})
@@ -222,6 +229,7 @@ def handle_json_file(data, insert_number):
                 RETURN file
                 """
                 session.run(merge_file_query, file_uuid=file_uuid, file_name=file_name, software_uuid=software_uuid, insert_number=insert_number)
+            logger.info(f"[handle_json_file] 文件节点 MERGE 完成 uuid={file_uuid}")
             index += 1
             
             # 现在来弄代码快
@@ -230,6 +238,7 @@ def handle_json_file(data, insert_number):
                 if code_data_total.get("status") and code_data_total.get("result"):
                     ttps = code_data_total.get("ttps")
                     if ttps:
+                        logger.info(f"[handle_json_file] 文件[{file_name}] 有 {len(ttps)} 段代码块候选")
                         code_index = 0
                         for code_item in ttps:
                             chunk_number = code_item.get("chunk_number")
@@ -240,6 +249,7 @@ def handle_json_file(data, insert_number):
                                 technique_id = code_item.get("technique_id")
                                 chunk_start_line = code_item.get("chunk_start_line")
                                 chunk_end_line = code_item.get("chunk_end_line")
+                                logger.info(f"[handle_json_file] 代码块[{code_index}] 命中，technique={technique_id}, 行号={chunk_start_line}-{chunk_end_line}, relevance={code_item.get('relevance')}")
                                 with driver.session() as session:
                                     merge_code_query = """
                                     MERGE (code:BaseEntity:MitreAttackCodeSoftwareCodeChunk {code_uuid: $code_uuid})
@@ -259,42 +269,45 @@ def handle_json_file(data, insert_number):
                                                 chunk_start_line=chunk_start_line, chunk_end_line=chunk_end_line)
                                     chunk_element_id = result2.single()["chunk_element_id"]
                                     all_chunk_element_id.append(chunk_element_id)
+                                logger.info(f"[handle_json_file] 代码块节点 MERGE 成功 code_uuid={code_uuid}, elementId={chunk_element_id}")
+                            else:
+                                logger.info(f"[handle_json_file] 代码块[{code_index}] 跳过，have_code={code_item.get('have_code')} relevance={code_item.get('relevance')}")
                             code_index += 1
+                    else:
+                        logger.info(f"[handle_json_file] 文件[{file_name}] 没有 ttps 数据")
+                else:
+                    logger.info(f"[handle_json_file] 文件[{file_name}] technique 状态异常: {code_data_total}")
+            else:
+                logger.info(f"[handle_json_file] 文件[{file_name}] 缺少 file_technique 字段")
+    else:
+        logger.info("[handle_json_file] 未提供 software_files 数据")
     all_chunk_element_id.append(software_element_id)
+    logger.info(f"[handle_json_file] 总计文件UUID {len(all_file_ids)} 个，代码块节点 {len(all_chunk_element_id) - 1} 个")
     return all_file_ids, software_uuid, all_chunk_element_id
 
 def send_request_embedding(text):
-    texts = []
-    texts_ids = [] 
-    texts.append(text[1])
-    texts_ids.append(text[0])
+    # text 形如 [element_id, description]
+    texts = [text[1]]
+    texts_ids = [text[0]]
     
-    url = EMBEDDING_URL
-    # 构建请求体
-    req_body = {
-        "texts": texts
-    }
-    # 设置请求头
     headers = {
-        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "x-api-key": EMBEDDING_API_KEY,
     }
+    body = {"texts": texts}
     try:
-        # 发送POST请求
-        response = requests.post(url=url, headers=headers, json=req_body)
-        # 检查响应状态
+        response = requests.post(url=EMBEDDING_URL, headers=headers, json=body)
         if response.status_code == 200:
             data = response.json()
-            embedding1 = data['embeddings'][0]
-
-            embeddings_list = [embedding1]
-            return texts_ids, embeddings_list
-        else:
-            # print(f"\n请求失败! 状态码: {response.status_code}")
-            # print(f"错误信息: {response.text}")
+            embeddings = data.get("embeddings")
+            if embeddings:
+                return texts_ids, embeddings
+            logger.info(f"[send_request_embedding] Stella 返回为空 elementId={texts_ids}")
             return None
+        logger.info(f"[send_request_embedding] Stella 请求失败 status={response.status_code}, body={response.text}")
+        return None
     except Exception as e:
-        # print(f"\n发生错误: {str(e)}")
+        logger.info(f"[send_request_embedding] Stella 请求异常: {e}")
         return None
 
 def add_embedding_data_to_neo4j():
@@ -314,6 +327,7 @@ def add_embedding_data_to_neo4j():
             if not description:
                 continue
             total_list.append([element_id, description])
+        logger.info(f"[add_embedding_data_to_neo4j] 待处理软件节点 {len(total_list)} 条")
         
         # 查询另一种节点（假设标签为 AnotherNodeType）
         search_another_query = """
@@ -328,9 +342,14 @@ def add_embedding_data_to_neo4j():
             if not description:
                 continue
             total_list.append([element_id, description])
+        logger.info(f"[add_embedding_data_to_neo4j] 总计待 embedding 节点 {len(total_list)} 条")
         # 批量处理 embedding
         for i in total_list:
-            texts_ids, embeddings_list = send_request_embedding(i)
+            embedding_result = send_request_embedding(i)
+            if not embedding_result:
+                logger.info(f"[add_embedding_data_to_neo4j] embedding 请求失败，跳过 elementId={i[0]}")
+                continue
+            texts_ids, embeddings_list = embedding_result
             if texts_ids and embeddings_list:
                 for index, element_id2 in enumerate(texts_ids):
                     with driver.session() as session:
@@ -341,6 +360,7 @@ def add_embedding_data_to_neo4j():
                         SET n.description_embedding = $embedding
                         """
                         session.run(update_query, element_id=element_id2, embedding=embeddings_list[index])
+                        logger.info(f"[add_embedding_data_to_neo4j] 更新 embedding elementId={element_id2}")
 
 def add_relateship(all_file_ids, software_uuid, insert_number):
     insert_number = 0

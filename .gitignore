@@ -16,3 +16,4 @@ config_files/
 neo4j_data/
 neo4j_data.bak/
 skipped_ids.txt
+codecontext-python/

@@ -7,10 +7,10 @@ NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', "D6gkdYMp3NrDzh")
 INDEX_NAME = os.getenv('INDEX_NAME', "mitre_acttack_index")
 
 # Embedding 模型设置
-EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://10.7.7.200:8222/embeddings/bgem3")
-EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', "BAAI/bge-m3")
-EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "sk-bjgqeyesmvqkyoggvgnptzkshhjheomlwktszrdfkadwpyjl")
-EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
+EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://10.1.1.125:14829/get_embeddings/stella")
+# EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', "BAAI/bge-m3")
+EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876")
+# EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
 
 # Chat 模型设置
 CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")

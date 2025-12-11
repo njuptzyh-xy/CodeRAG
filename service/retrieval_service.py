@@ -4,7 +4,7 @@ from database_helper.neo4j_helper import Neo4jHelper
 from openai import OpenAI
 from setting import (
     CHAT_MODEL_NAME, CHAT_MODEL_API_KEY, CHAT_URL, 
-    CHAT_TEMPERATURE, CHAT_MAX_TOKENS, RERANK_URL, EMBEDDING_URL
+    CHAT_TEMPERATURE, CHAT_MAX_TOKENS, RERANK_URL, EMBEDDING_URL,EMBEDDING_API_KEY
 )
 from database_helper.es_helper import ESHelper
 from utils.prompts import get_prompts
@@ -26,16 +26,25 @@ class OpenaiEmbeddingClient:
 
     def embed_query(self, text: str) -> list[float]:
         headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "x-api-key": EMBEDDING_API_KEY,  # 复用现有 key 变量
         }
+        payload = {"texts": [text]}
         
-        payload = {
-            "texts": [text]
-        }
-        
-        response = requests.post(self.embedding_url, json=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()["embeddings"][0]
+        try:
+            response = requests.post(self.embedding_url, json=payload, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                embeddings = data.get("embeddings")
+                if embeddings:
+                    return embeddings[0]
+                print("[embed_query] Stella 返回为空")
+                return None
+            print(f"[embed_query] Stella 请求失败 status={response.status_code}, body={response.text}")
+            return None
+        except Exception as e:
+            print(f"[embed_query] Stella 请求异常: {e}")
+            return None
 
 
 class CustomOpenAIEmbeddings:
