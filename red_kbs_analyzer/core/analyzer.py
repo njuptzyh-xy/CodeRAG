@@ -4,6 +4,7 @@
 """
 import os
 import json
+import asyncio
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,7 +13,7 @@ from pathlib import Path
 from ..models.project import RedTool, ProjectAnalysisResult
 from ..models.analysis import CodeFile, CodeChunk
 from .file_processor import FileProcessor
-from .code_splitter import CodeSplitter
+from .ast_splitter import ASTCodeSplitter
 from ..llm.interface import LLMInterface
 from ..llm.utils import format_code_chunks_for_llm
 from ..run_logs.logger import logger
@@ -44,7 +45,10 @@ class ProjectAnalyzer:
             llm_config: LLM配置
         """
         self.file_processor = FileProcessor(max_file_size=max_file_size)
-        self.code_splitter = CodeSplitter(max_chars=max_chunk_chars, min_lines=min_chunk_lines)
+        self.max_chunk_chars = max_chunk_chars
+        self.min_chunk_lines = min_chunk_lines
+        # 使用 AST 分割器替代原行分割器
+        self.ast_splitter = ASTCodeSplitter(chunk_size=2500, chunk_overlap=300)
         self.max_workers = max_workers
         self.max_code_files = max_code_files
         self.max_code_length = max_code_length
@@ -177,8 +181,28 @@ class ProjectAnalyzer:
             if not content.strip():
                 return None
             
-            # 分割代码块
-            chunks = self.code_splitter.split_file(code_file, content)
+            # 基于 AST 的代码分割（异步接口同步调用）
+            language = Path(code_file.file_name).suffix.lstrip(".").lower() or "text"
+            raw_chunks = asyncio.run(
+                self.ast_splitter.split(
+                    code=content,
+                    language=language,
+                    file_path=code_file.file_abs_path,
+                )
+            )
+
+            # 适配为内部的 CodeChunk 模型
+            chunks = [
+                CodeChunk(
+                    code=chunk.content,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    file_path=chunk.file_path or code_file.file_path,
+                    chunk_number=idx,
+                    language=language,
+                )
+                for idx, chunk in enumerate(raw_chunks)
+            ]
             
             # 更新文件对象
             code_file.chunks = chunks

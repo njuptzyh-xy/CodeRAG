@@ -378,28 +378,24 @@ def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chu
         # print("看看 documengt_id\n", document_element_id)
 
 def get_embhedding(chunk_description):
-    url = EMBEDDING_URL
-    # 构建请求体
-    req_body = {
-        "texts": [chunk_description]
-    }
-    # 设置请求头
     headers = {
-        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "x-api-key": EMBEDDING_API_KEY,
     }
+    body = {"texts": [chunk_description]}
     try:
-        # 发送POST请求
-        response = session.post(url=url, headers=headers, json=req_body)
-        # 检查响应状态
+        response = requests.post(url=EMBEDDING_URL, headers=headers, json=body)
         if response.status_code == 200:
             data = response.json()
-
-            embedding1 = data['embeddings'][0]
-            return embedding1
-        else:
+            embeddings = data.get("embeddings")
+            if embeddings:
+                return embeddings[0]
+            print(f"[get_embhedding] Stella 返回为空")
             return None
+        print(f"[get_embhedding] Stella 请求失败 status={response.status_code}, body={response.text}")
+        return None
     except Exception as e:
+        print(f"[get_embhedding] Stella 请求异常: {e}")
         return None
 
 def insert_neo4j_chunk(chunk_json_file_name, source_name):
@@ -412,14 +408,15 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
     all_chunk_element_id = []
     for chunk_item in chunks_list:
         chunk_description = chunk_item.get("content")
-            
-        chunk_description_embedding = get_embhedding(chunk_description)
-        if chunk_description_embedding is None:
-            print(f"{chunk_id} chunk 描述embedding 失败")
-            continue
-
+        # 先取出 id/index，避免 embedding 失败时变量未定义
         chunk_index = chunk_item.get("metadata", {}).get("chunk_number")
         chunk_id = chunk_item.get("metadata", {}).get("chunk_id")
+
+        chunk_description_embedding = get_embhedding(chunk_description)
+        if chunk_description_embedding is None:
+            print(f"{chunk_id or chunk_index} chunk 描述embedding 失败")
+            continue
+
         chunk_insert_number = 0
         chunk_insert_type = "user_upload_article_chunk"
             

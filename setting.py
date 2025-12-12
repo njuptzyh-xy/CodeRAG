@@ -69,6 +69,6 @@ MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
 MILVUS_USER = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
 MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
-MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "es_migration")
+MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "es_migration_new")
 MILVUS_CONSISTENCY_LEVEL = os.getenv("MILVUS_CONSISTENCY_LEVEL", "Bounded")
 MILVUS_SECURE = os.getenv("MILVUS_SECURE", "false").lower() == "true"
