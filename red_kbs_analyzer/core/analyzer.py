@@ -372,6 +372,7 @@ class ProjectAnalyzer:
         return {
             "file_name": file_name,
             "file_abs_path": file_abs_path,
+            "chunks": chunks,  # 包含所有原始代码块，用于全量入库
             "file_technique": technique_result or {
                 "result": False,
                 "ttps": [],

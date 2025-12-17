@@ -521,7 +521,7 @@ def _ensure_milvus_collection():
         print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
         
         try:
-            # 定义字段
+            # 定义字段：code_data + description + code__embedding
             fields = [
                 FieldSchema(
                     name="neo4j_id",
@@ -531,7 +531,7 @@ def _ensure_milvus_collection():
                     max_length=128,
                 ),
                 FieldSchema(
-                    name="description",
+                    name="code_data",
                     dtype=DataType.VARCHAR,
                     max_length=65535,
                     enable_analyzer=True,
@@ -541,7 +541,17 @@ def _ensure_milvus_collection():
                     },
                 ),
                 FieldSchema(
-                    name="description_embedding",
+                    name="description",
+                    dtype=DataType.VARCHAR,
+                    max_length=65535,
+                    enable_analyzer=True,
+                    analyzer_params={
+                        "tokenizer": "jieba",
+                        "filter": ["lowercase"],
+                    },
+                ),
+                FieldSchema(
+                    name="code__embedding",
                     dtype=DataType.FLOAT_VECTOR,
                     dim=vector_dim,
                 ),
@@ -551,7 +561,7 @@ def _ensure_milvus_collection():
                 ),
             ]
             
-            # 创建 BM25 函数，将 description 字段转换为稀疏向量
+            # 创建 BM25 函数，将 description 转为稀疏向量
             bm25_function = Function(
                 name="description_bm25",
                 input_field_names=["description"],
@@ -578,7 +588,7 @@ def _ensure_milvus_collection():
             try:
                 # 为稠密向量创建索引
                 collection.create_index(
-                    field_name="description_embedding",
+                    field_name="code__embedding",
                     index_params={
                         "index_type": "FLAT",
                         "metric_type": "COSINE",
@@ -630,7 +640,7 @@ def _ensure_milvus_collection():
             index_info = []
             
         vector_has_index = any(
-            idx.field_name == "description_embedding" for idx in index_info
+            idx.field_name == "code__embedding" for idx in index_info
         )
         sparse_has_index = any(
             idx.field_name == "sparse_vector" for idx in index_info
@@ -647,7 +657,7 @@ def _ensure_milvus_collection():
         if not vector_has_index:
             try:
                 collection.create_index(
-                    field_name="description_embedding",
+                    field_name="code__embedding",
                     index_params={
                         "index_type": "FLAT",
                         "metric_type": "COSINE",
@@ -692,12 +702,15 @@ def add_milvus(all_embedding_element_id):
         print("错误: Milvus 未连接，无法插入数据")
         return
     
-    # 查询指定 ID 的 BaseEntity 节点
+    # 查询指定 ID 的节点，使用 description 作为 code_data 写入 Milvus
     query = """
     UNWIND $element_ids AS element_id
     MATCH (n:BaseEntity)
     WHERE elementId(n) = element_id AND n.description IS NOT NULL
-    RETURN elementId(n) as element_id, n.description as description, n.description_embedding as description_embedding
+    RETURN elementId(n) as element_id,
+           n.description as description,
+           n.description as code_data,
+           n.description_embedding as code_embedding
     """
     
     try:
@@ -730,6 +743,7 @@ def add_milvus(all_embedding_element_id):
     
     # 准备批量插入的数据
     neo4j_ids = []
+    code_datas = []
     descriptions = []
     embeddings = []
     
@@ -737,10 +751,11 @@ def add_milvus(all_embedding_element_id):
         try:
             neo4j_id = str(record["element_id"])
             description = record["description"]
-            embedding = record["description_embedding"]
+            code_data = record["code_data"]
+            embedding = record["code_embedding"]
             
             # 验证数据
-            if not neo4j_id or not description or not embedding:
+            if not neo4j_id or not code_data or not embedding:
                 error_count += 1
                 print(f"跳过记录 {neo4j_id}: 数据不完整")
                 continue
@@ -758,7 +773,8 @@ def add_milvus(all_embedding_element_id):
                 continue
             
             neo4j_ids.append(neo4j_id)
-            descriptions.append(description)
+            code_datas.append(code_data)
+            descriptions.append(description or "")
             embeddings.append(embedding)
             
         except Exception as e:
@@ -772,8 +788,8 @@ def add_milvus(all_embedding_element_id):
     # 批量插入数据
     if neo4j_ids:
         try:
-            # 确保字段顺序与 schema 定义一致: neo4j_id, description, description_embedding
-            entities = [neo4j_ids, descriptions, embeddings]
+            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
+            entities = [neo4j_ids, code_datas, descriptions, embeddings]
             print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
             result = collection.upsert(entities)
             print(f"Upsert 返回结果: {result}")

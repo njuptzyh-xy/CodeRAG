@@ -54,8 +54,7 @@ class Neo4jHelper:
                     for node_label_item in node_labels:
                         if node_label_item !=  "BaseEntity":
                             node_type = node_label_item
-        
-        if node_type:
+        if node_type:# "MitreAttackArticleChunk"
             return_fields = NODE_RETURN_FIELDS.get(node_type)
             if not return_fields:
                 return_fields = "all" 

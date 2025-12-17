@@ -179,7 +179,7 @@ class RetrievalRoute:
             node_data = self.neo4j_drive.get_single_point_data(es_item_neo4j_id)
             if node_data:  # 添加空值检查
                 final_result.append(node_data)
-        # print("============================\n", final_result)
+        print("============================\n", final_result)
         return final_result
 
     def vector_expansion_search(self):

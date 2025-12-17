@@ -18,8 +18,9 @@ class ESHelper:
     """
 
     def __init__(self) -> None:
-        self.fulltext_field = setting.ES_FULLTEXT_INDEX_FILED
-        self.vector_field = setting.ES_VECTOR_FILED
+        self.fulltext_field = setting.MILVUS_FULLTEXT_INDEX_FILED
+        self.vector_field = setting.MILVUS_VECTOR_FILED
+        self.code_field = setting.MILVUS_CODE_INDEX_FILED
         # BM25 稀疏向量字段（由 BM25 函数自动生成）
         self.sparse_vector_field = "sparse_vector"
         self.partition_names = getattr(setting, "MILVUS_PARTITION_NAMES", None)
@@ -33,8 +34,8 @@ class ESHelper:
 
         self.collection = self._init_collection()
         
-        # 直接设置需要返回的字段：neo4j_id 和 description
-        self.output_fields = ["neo4j_id", "description"]
+        # 直接设置需要返回的字段：neo4j_id、code_data、description
+        self.output_fields = ["neo4j_id", "code_data", "description"]
 
     def _init_collection(self) -> Optional[Collection]:
         """连接并加载指定的 Milvus collection。"""

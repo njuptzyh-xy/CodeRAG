@@ -99,15 +99,15 @@ Here is the format of the your output:
         {{
       "technique_id": "", # 技术id/子技术id
       "name": "", # 技术名称/子技术名称 #中英文
-      "code_relevance": "", # 代码中可以佐证的地方
+      "code_relevance": "", # 代码中可以佐证的地方（必须用中文描述）
       "chunk_number": 1, # 代码块编号 
       "relevance": 1.0, # 相关性得分，0-1之间，1表示完全相关，0表示完全不相关，只有当技术与代码相关时，才给出相关性得分 
-    "have_code": true, # 是否在代码中实现
+      "have_code": true, # 是否在代码中实现
     }},
     {{
       "technique_id": "", # 技术id
       "name": "", # 技术名称
-      "code_relevance": "", # 代码中可以佐证的地方
+      "code_relevance": "", # 代码中可以佐证的地方（必须用中文描述）
       "chunk_number": -1, # 代码块编号, 如果代码块编号为-1，则表示该技术没有在代码中实现
       "relevance": 0.9,  # 
       "have_code": false

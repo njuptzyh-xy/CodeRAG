@@ -232,53 +232,83 @@ def handle_json_file(data, insert_number):
             logger.info(f"[handle_json_file] 文件节点 MERGE 完成 uuid={file_uuid}")
             index += 1
             
-            # 现在来弄代码快
+            # 全量入库：处理文件的所有代码块
+            all_chunks = single_file.get("chunks", [])
             code_data_total = single_file.get("file_technique")
-            if code_data_total:
-                if code_data_total.get("status") and code_data_total.get("result"):
-                    ttps = code_data_total.get("ttps")
-                    if ttps:
-                        logger.info(f"[handle_json_file] 文件[{file_name}] 有 {len(ttps)} 段代码块候选")
-                        code_index = 0
-                        for code_item in ttps:
-                            chunk_number = code_item.get("chunk_number")
-                            code_uuid = "code-{}-{}-{}-{}".format(behind_uuid, index, chunk_number, code_index)
-                            if code_item.get("have_code") and code_item.get("relevance") >= 0.9:
-                                description = code_item.get("code_relevance")
-                                code_data = code_item.get("chunk_code")
-                                technique_id = code_item.get("technique_id")
-                                chunk_start_line = code_item.get("chunk_start_line")
-                                chunk_end_line = code_item.get("chunk_end_line")
-                                logger.info(f"[handle_json_file] 代码块[{code_index}] 命中，technique={technique_id}, 行号={chunk_start_line}-{chunk_end_line}, relevance={code_item.get('relevance')}")
-                                with driver.session() as session:
-                                    merge_code_query = """
-                                    MERGE (code:BaseEntity:MitreAttackCodeSoftwareCodeChunk {code_uuid: $code_uuid})
-                                    ON CREATE SET
-                                        code.code_uuid = $code_uuid,
-                                        code.file_uuid = $file_uuid,
-                                        code.insert_number = $insert_number,
-                                        code.code_data = $code_data,
-                                        code.description = $description,
-                                        code.technique_id = $technique_id,
-                                        code.chunk_start_line = $chunk_start_line,
-                                        code.chunk_end_line = $chunk_end_line
-                                    RETURN elementId(code) as chunk_element_id
-                                    """
-                                    result2 = session.run(merge_code_query, code_uuid=code_uuid, file_uuid=file_uuid, insert_number=insert_number, 
-                                                code_data=code_data, description=description, technique_id=technique_id, 
-                                                chunk_start_line=chunk_start_line, chunk_end_line=chunk_end_line)
-                                    chunk_element_id = result2.single()["chunk_element_id"]
-                                    all_chunk_element_id.append(chunk_element_id)
-                                logger.info(f"[handle_json_file] 代码块节点 MERGE 成功 code_uuid={code_uuid}, elementId={chunk_element_id}")
-                            else:
-                                logger.info(f"[handle_json_file] 代码块[{code_index}] 跳过，have_code={code_item.get('have_code')} relevance={code_item.get('relevance')}")
-                            code_index += 1
-                    else:
-                        logger.info(f"[handle_json_file] 文件[{file_name}] 没有 ttps 数据")
-                else:
-                    logger.info(f"[handle_json_file] 文件[{file_name}] technique 状态异常: {code_data_total}")
-            else:
-                logger.info(f"[handle_json_file] 文件[{file_name}] 缺少 file_technique 字段")
+            
+            # 构建 chunk_number -> ttp 的映射，用于查找哪些代码块有技术
+            ttp_map = {}
+            if code_data_total and code_data_total.get("status") and code_data_total.get("result"):
+                ttps = code_data_total.get("ttps", [])
+                for ttp in ttps:
+                    chunk_num = ttp.get("chunk_number")
+                    if chunk_num is not None:
+                        ttp_map[chunk_num] = ttp
+                logger.info(f"[handle_json_file] 文件[{file_name}] 有 {len(ttps)} 个技术，{len(all_chunks)} 个代码块")
+            
+            if not all_chunks:
+                logger.info(f"[handle_json_file] 文件[{file_name}] 没有代码块")
+                continue
+            
+            # 遍历所有代码块，全量入库
+            code_index = 0
+            for chunk in all_chunks:
+                chunk_number = chunk.get("chunk_number", code_index)
+                code_data = chunk.get("code", "")
+                
+                # 跳过空代码块
+                if not code_data or not str(code_data).strip():
+                    logger.info(f"[handle_json_file] 代码块[{chunk_number}] 跳过，原因: code 为空")
+                    code_index += 1
+                    continue
+                
+escription = ttp.ge
+                    technique_id = None
+                    have_code = False
+                    relevance = None
+                
+                chunk_start_line = chunk.get("start_line", 0)
+                chunk_end_line = chunk.get("end_line", 0)
+                code_uuid = "code-{}-{}-{}-{}".format(behind_uuid, index, chunk_number, code_index)
+                
+                logger.info(
+                    f"[handle_json_file] 代码块[{chunk_number}] 入库，technique={technique_id}, "
+                    f"行号={chunk_start_line}-{chunk_end_line}"
+                )
+                
+                with driver.session() as session:
+                    merge_code_query = """
+                    MERGE (code:BaseEntity:MitreAttackCodeSoftwareCodeChunk {code_uuid: $code_uuid})
+                    ON CREATE SET
+                        code.code_uuid = $code_uuid,
+                        code.file_uuid = $file_uuid,
+                        code.insert_number = $insert_number,
+                        code.code_data = $code_data,
+                        code.description = $description,
+                        code.technique_id = $technique_id,
+                        code.chunk_start_line = $chunk_start_line,
+                        code.chunk_end_line = $chunk_end_line,
+                        code.have_code = $have_code,
+                        code.relevance = $relevance
+                    RETURN elementId(code) as chunk_element_id
+                    """
+                    result2 = session.run(
+                        merge_code_query,
+                        code_uuid=code_uuid,
+                        file_uuid=file_uuid,
+                        insert_number=insert_number,
+                        code_data=code_data,
+                        description=description,
+                        technique_id=technique_id,
+                        chunk_start_line=chunk_start_line,
+                        chunk_end_line=chunk_end_line,
+                        have_code=have_code,
+                        relevance=relevance,
+                    )
+                    chunk_element_id = result2.single()["chunk_element_id"]
+                    all_chunk_element_id.append(chunk_element_id)
+                logger.info(f"[handle_json_file] 代码块节点 MERGE 成功 code_uuid={code_uuid}, elementId={chunk_element_id}")
+                code_index += 1
     else:
         logger.info("[handle_json_file] 未提供 software_files 数据")
     all_chunk_element_id.append(software_element_id)
@@ -311,56 +341,59 @@ def send_request_embedding(text):
         return None
 
 def add_embedding_data_to_neo4j():
-    # 两种标签的结点需要进行embedding
+    """
+    获取 Neo4j 中的 code_data，生成 code_embedding，并写回节点。
+    description 仅保存文本，不再生成 embedding。
+    """
     with driver.session() as session:
-        # 查询 MitreAttackCodeSoftware 节点
-        search_software_query = """
-        MATCH (n:MitreAttackCodeSoftware)
-        WHERE n.description_embedding IS NULL
-        RETURN elementId(n) AS element_id, n.description AS description
-        """
-        software_data = session.run(search_software_query)
-        total_list = []
-        for software_record in software_data:
-            element_id = software_record["element_id"]
-            description = software_record["description"]
-            if not description:
-                continue
-            total_list.append([element_id, description])
-        logger.info(f"[add_embedding_data_to_neo4j] 待处理软件节点 {len(total_list)} 条")
-        
-        # 查询另一种节点（假设标签为 AnotherNodeType）
-        search_another_query = """
+        search_code_query = """
         MATCH (n:MitreAttackCodeSoftwareCodeChunk)
-        WHERE n.description_embedding IS NULL
-        RETURN elementId(n) AS element_id, n.description AS description
+        WHERE n.code_data IS NOT NULL
+          AND n.code_embedding IS NULL
+        RETURN elementId(n) AS element_id,
+               n.code_data AS code_data,
+               n.description AS description
         """
-        another_data = session.run(search_another_query)
-        for another_record in another_data:
-            element_id = another_record["element_id"]
-            description = another_record["description"]
-            if not description:
-                continue
-            total_list.append([element_id, description])
-        logger.info(f"[add_embedding_data_to_neo4j] 总计待 embedding 节点 {len(total_list)} 条")
-        # 批量处理 embedding
-        for i in total_list:
-            embedding_result = send_request_embedding(i)
-            if not embedding_result:
-                logger.info(f"[add_embedding_data_to_neo4j] embedding 请求失败，跳过 elementId={i[0]}")
-                continue
-            texts_ids, embeddings_list = embedding_result
-            if texts_ids and embeddings_list:
-                for index, element_id2 in enumerate(texts_ids):
-                    with driver.session() as session:
-                        # 更新节点 embedding
-                        update_query = """
-                        MATCH (n)
-                        WHERE elementId(n) = $element_id
-                        SET n.description_embedding = $embedding
-                        """
-                        session.run(update_query, element_id=element_id2, embedding=embeddings_list[index])
-                        logger.info(f"[add_embedding_data_to_neo4j] 更新 embedding elementId={element_id2}")
+        code_chunks = list(session.run(search_code_query))
+    logger.info(f"[add_embedding_data_to_neo4j] 待处理代码块 {len(code_chunks)} 条")
+    
+    processed_ids = []
+    for record in code_chunks:
+        element_id = record["element_id"]
+        code_data = record["code_data"]
+        description = record["description"]
+        if not code_data:
+            logger.info(f"[add_embedding_data_to_neo4j] code_data 为空，跳过 elementId={element_id}")
+            continue
+        
+        embedding_result = send_request_embedding([element_id, code_data])
+        if not embedding_result:
+            logger.info(f"[add_embedding_data_to_neo4j] code_data 向量化失败，跳过 elementId={element_id}")
+            continue
+        
+        texts_ids, embeddings_list = embedding_result
+        if not texts_ids or not embeddings_list:
+            logger.info(f"[add_embedding_data_to_neo4j] 向量结果为空，跳过 elementId={element_id}")
+            continue
+        
+        code_embedding = embeddings_list[0]
+        with driver.session() as session:
+            update_query = """
+            MATCH (n)
+            WHERE elementId(n) = $element_id
+            SET n.code_embedding = $code_embedding,
+                n.description = coalesce(n.description, $description)
+            """
+            session.run(
+                update_query,
+                element_id=element_id,
+                code_embedding=code_embedding,
+                description=description,
+            )
+        processed_ids.append(element_id)
+        logger.info(f"[add_embedding_data_to_neo4j] 更新 code_embedding elementId={element_id}")
+    
+    return processed_ids
 
 def add_relateship(all_file_ids, software_uuid, insert_number):
     insert_number = 0
@@ -396,10 +429,13 @@ def add_relateship(all_file_ids, software_uuid, insert_number):
             """
             code_techniques = session.run(search_code_techniques_query, file_uuid=file_uuid)
             
-            # 建立代码片段节点和技术节点的关系
+            # 建立代码片段节点和技术节点的关系（只对有technique_id的代码块建立关系）
             for code_tech_record in code_techniques:
                 code_uuid = code_tech_record["code_uuid"]
                 technique_id = code_tech_record["technique_id"]
+                # 跳过没有technique_id的代码块
+                if not technique_id:
+                    continue
                 merge_code_technique_query = """
                 MATCH (code:MitreAttackCodeSoftwareCodeChunk {code_uuid: $code_uuid}), (tech:MitreAttackTechnique {attack_id: $technique_id})
                 MERGE (code)-[r:CODE_SOFTWARE_CODE_CHUNK_BELONG_TECHNIQUE]->(tech)
@@ -447,7 +483,7 @@ def _ensure_milvus_collection():
         print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
         
         try:
-            # 定义字段
+            # 定义字段：code_data + description + code__embedding
             fields = [
                 FieldSchema(
                     name="neo4j_id",
@@ -457,7 +493,7 @@ def _ensure_milvus_collection():
                     max_length=128,
                 ),
                 FieldSchema(
-                    name="description",
+                    name="code_data",
                     dtype=DataType.VARCHAR,
                     max_length=65535,
                     enable_analyzer=True,
@@ -467,7 +503,17 @@ def _ensure_milvus_collection():
                     },
                 ),
                 FieldSchema(
-                    name="description_embedding",
+                    name="description",
+                    dtype=DataType.VARCHAR,
+                    max_length=65535,
+                    enable_analyzer=True,
+                    analyzer_params={
+                        "tokenizer": "jieba",
+                        "filter": ["lowercase"],
+                    },
+                ),
+                FieldSchema(
+                    name="code__embedding",
                     dtype=DataType.FLOAT_VECTOR,
                     dim=vector_dim,
                 ),
@@ -477,7 +523,7 @@ def _ensure_milvus_collection():
                 ),
             ]
             
-            # 创建 BM25 函数，将 description 字段转换为稀疏向量
+            # 创建 BM25 函数，将 description 转为稀疏向量
             bm25_function = Function(
                 name="description_bm25",
                 input_field_names=["description"],
@@ -504,7 +550,7 @@ def _ensure_milvus_collection():
             try:
                 # 为稠密向量创建索引
                 collection.create_index(
-                    field_name="description_embedding",
+                    field_name="code__embedding",
                     index_params={
                         "index_type": "FLAT",
                         "metric_type": "COSINE",
@@ -556,7 +602,7 @@ def _ensure_milvus_collection():
             index_info = []
             
         vector_has_index = any(
-            idx.field_name == "description_embedding" for idx in index_info
+            idx.field_name == "code__embedding" for idx in index_info
         )
         sparse_has_index = any(
             idx.field_name == "sparse_vector" for idx in index_info
@@ -573,7 +619,7 @@ def _ensure_milvus_collection():
         if not vector_has_index:
             try:
                 collection.create_index(
-                    field_name="description_embedding",
+                    field_name="code__embedding",
                     index_params={
                         "index_type": "FLAT",
                         "metric_type": "COSINE",
@@ -621,9 +667,13 @@ def add_milvus(all_embedding_element_id):
     # 查询指定 ID 的 BaseEntity 节点
     query = """
     UNWIND $element_ids AS element_id
-    MATCH (n:BaseEntity)
-    WHERE elementId(n) = element_id AND n.description IS NOT NULL
-    RETURN elementId(n) as element_id, n.description as description, n.description_embedding as description_embedding
+    MATCH (n:MitreAttackCodeSoftwareCodeChunk)
+    WHERE elementId(n) = element_id
+      AND n.code_embedding IS NOT NULL
+    RETURN elementId(n) as element_id,
+           n.code_data as code_data,
+           n.description as description,
+           n.code_embedding as code_embedding
     """
     
     try:
@@ -656,17 +706,19 @@ def add_milvus(all_embedding_element_id):
     
     # 准备批量插入的数据
     neo4j_ids = []
+    code_datas = []
     descriptions = []
     embeddings = []
     
     for record in all_records:
         try:
             neo4j_id = str(record["element_id"])
+            code_data = record["code_data"]
             description = record["description"]
-            embedding = record["description_embedding"]
+            embedding = record["code_embedding"]
             
             # 验证数据
-            if not neo4j_id or not description or not embedding:
+            if not neo4j_id or not code_data or not embedding:
                 error_count += 1
                 print(f"跳过记录 {neo4j_id}: 数据不完整")
                 continue
@@ -684,7 +736,8 @@ def add_milvus(all_embedding_element_id):
                 continue
             
             neo4j_ids.append(neo4j_id)
-            descriptions.append(description)
+            code_datas.append(code_data)
+            descriptions.append(description or "")
             embeddings.append(embedding)
             
         except Exception as e:
@@ -698,8 +751,8 @@ def add_milvus(all_embedding_element_id):
     # 批量插入数据
     if neo4j_ids:
         try:
-            # 确保字段顺序与 schema 定义一致: neo4j_id, description, description_embedding
-            entities = [neo4j_ids, descriptions, embeddings]
+            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
+            entities = [neo4j_ids, code_datas, descriptions, embeddings]
             print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
             result = collection.upsert(entities)
             print(f"Upsert 返回结果: {result}")

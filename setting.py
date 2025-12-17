@@ -72,3 +72,6 @@ MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
 MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "es_migration_new")
 MILVUS_CONSISTENCY_LEVEL = os.getenv("MILVUS_CONSISTENCY_LEVEL", "Bounded")
 MILVUS_SECURE = os.getenv("MILVUS_SECURE", "false").lower() == "true"
+MILVUS_FULLTEXT_INDEX_FILED = os.getenv("MILVUS_FULLTEXT_INDEX_FILED", "code_data")
+MILVUS_CODE_INDEX_FILED = os.getenv("MILVUS_CODE_INDEX_FILED", "code_data")
+MILVUS_VECTOR_FILED = os.getenv("MILVUS_VECTOR_FILED", "code__embedding")
