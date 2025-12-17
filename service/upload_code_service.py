@@ -262,7 +262,16 @@ def handle_json_file(data, insert_number):
                     code_index += 1
                     continue
                 
-escription = ttp.ge
+                # 从 ttp_map 中获取与当前代码块关联的技术信息
+                ttp = ttp_map.get(chunk_number)
+                if ttp:
+                    # 使用 LLM 返回的代码相关性描述作为 description
+                    description = ttp.get("code_relevance") or ttp.get("name")
+                    technique_id = ttp.get("technique_id")
+                    have_code = ttp.get("have_code", False)
+                    relevance = ttp.get("relevance")
+                else:
+                    description = None
                     technique_id = None
                     have_code = False
                     relevance = None
