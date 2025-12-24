@@ -5,6 +5,7 @@
 import os
 import json
 import asyncio
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +15,10 @@ from ..models.project import RedTool, ProjectAnalysisResult
 from ..models.analysis import CodeFile, CodeChunk
 from .file_processor import FileProcessor
 from .ast_splitter import ASTCodeSplitter
+from .claude_code import (
+    generate_project_summary_with_claude,
+    identify_main_files_with_claude,
+)
 from ..llm.interface import LLMInterface
 from ..llm.utils import format_code_chunks_for_llm
 from ..run_logs.logger import logger
@@ -218,17 +223,35 @@ class ProjectAnalyzer:
     
     def _generate_project_summary(self, project: RedTool, processed_files: List[Dict[str, Any]]) -> str:
         """生成项目摘要"""
-        # 调用LLM生成摘要
+        # 优先使用 Claude Code 生成摘要
+        try:
+            summary_result = asyncio.run(
+                generate_project_summary_with_claude(project, processed_files)
+            )
+            logger.info(f"project_name: {project.project_name}")
+            logger.info(f"file_tree: {project.file_tree}")
+            logger.info(f"summary: {summary_result.get('summary')}")
+            logger.info(f"main_files: {summary_result.get('files')}")
+
+            if summary_result and "summary" in summary_result:
+                if "files" in summary_result and summary_result.get("files"):
+                    project.main_files = summary_result["files"]
+                return summary_result["summary"]
+        except Exception as e:
+            logger.error(f"Claude Code 生成摘要失败: {e}，尝试使用 LLM 接口")
+        
+        # 备用：调用LLM接口（保持原有兼容）
         if self.llm_interface:
+            logger.info("llm生成摘要")
             summary_result = self._call_llm_for_summary(project, processed_files)
             if summary_result and "summary" in summary_result:
-                # 同时更新项目的主要文件列表
                 if "files" in summary_result:
                     project.main_files = summary_result["files"]
                 return summary_result["summary"]
         
         # 备用方案：生成简单摘要
-        main_files = self._identify_main_files(processed_files)
+        logger.info("备用方案生成摘要")
+        main_files = self._identify_main_files(processed_files, project)
         summary_parts = []
         
         if project.readme_content:
@@ -242,8 +265,43 @@ class ProjectAnalyzer:
         
         return "; ".join(summary_parts)
     
-    def _identify_main_files(self, processed_files: List[Dict[str, Any]]) -> List[str]:
-        """识别主要文件"""
+    def _identify_main_files(self, processed_files: List[Dict[str, Any]], project: Optional[RedTool] = None) -> List[str]:
+        """
+        识别主要文件（使用 Claude Code 或备用模式匹配）
+        
+        Args:
+            processed_files: 处理后的文件列表
+            project: 项目对象，用于获取项目路径和名称
+            
+        Returns:
+            主要文件名列表
+        """
+        logger.info(f"项目信息:{project}")
+        # 如果提供了项目信息，使用 Claude Code 识别
+        if project:
+            logger.info("开始使用 Claude Code 识别主要文件...")
+            try:
+                main_files_abs_paths = asyncio.run(
+                    identify_main_files_with_claude(project, processed_files)
+                )
+                # 将绝对路径转换为文件名列表
+                main_files = []
+                for abs_path in main_files_abs_paths:
+                    file_name = os.path.basename(abs_path)
+                    # 验证该文件名是否在 processed_files 中
+                    for file_dict in processed_files:
+                        if file_dict.get("file_abs_path") == abs_path or file_dict.get("file_name") == file_name:
+                            main_files.append(file_dict.get("file_name", file_name))
+                            break
+                if main_files:
+                    logger.info(f"使用 Claude Code 识别出 {len(main_files)} 个主要文件")
+                    return main_files[:10]  # 最多返回10个
+                else:
+                    logger.info("Claude Code 未识别出主要文件，将使用备用规则")
+            except Exception as e:
+                logger.error(f"Claude Code 识别主要文件失败: {e}，使用备用方案")
+        
+        # 备用方案：基于文件名模式匹配
         main_patterns = [
             "main", "index", "app", "server", "client", "core", 
             "init", "setup", "config", "start", "run"
@@ -256,7 +314,7 @@ class ProjectAnalyzer:
                 main_files.append(file_dict.get("file_name", ""))
         
         return main_files
-    
+  
     def _analyze_project_tactics(self, project: RedTool, processed_files: List[Dict[str, Any]]) -> Dict[str, Any]:
         """分析项目战术"""
         # 调用LLM分析战术
@@ -386,7 +444,7 @@ class ProjectAnalyzer:
                                 tactics_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         """分析文件技术（保留原有方法以兼容）"""
         return self._analyze_file_techniques_concurrent(processed_files, project, tactics_analysis)
-    
+    #暂时搁置，使用claude-code生成项目摘要和主要文件
     def _call_llm_for_summary(self, project: RedTool, processed_files: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """调用LLM生成项目摘要"""
         try:
@@ -500,7 +558,8 @@ class ProjectAnalyzer:
     
     def _get_main_files_content(self, project: RedTool, processed_files: List[Dict[str, Any]]) -> str:
         """获取主要文件的代码内容"""
-        main_files = project.main_files or self._identify_main_files(processed_files)
+        logger.info("获取主要文件。。。")
+        main_files = project.main_files or self._identify_main_files(processed_files, project)
         
         all_content = ""
         content_length = 0

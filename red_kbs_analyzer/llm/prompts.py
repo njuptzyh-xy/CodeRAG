@@ -12,6 +12,27 @@ class PromptTemplates:
     def __init__(self):
         """初始化模板"""
         # 项目摘要提示词模板
+        self.CLOUDE_SUMMARY_PROMPT = """
+This is the ReadMe.md documentation for this project
+{readme_content}
+
+This is the file directory tree for this project
+  {file_tree}
+
+  You'll need to analyze the project from the perspective of the RED team and the Mitre-ATTCK attack framework, and deduce the most likely tactics involved in the software, as well as how the data flows.
+  The results of the analysis should not exceed 300 words.
+
+  You also need to provide a list of typical files(max 5 files), which can represent the main tactical activities of this software.
+
+  Here is the format of the your output:
+  ```json
+  {{
+      "summary": max 300 words to describe the project,
+    "files": [File 1, File 2, File 3]  # 输出文件相对于项目的路径
+}}
+```
+Note: You only need to return json, you don't need to output anything else
+"""
         self.SUMMARY_PROMPT = """
 This is the ReadMe.md documentation for this project
 {readme_content}

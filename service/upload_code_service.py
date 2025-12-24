@@ -10,6 +10,7 @@ from datetime import datetime
 import requests
 from red_kbs_analyzer import RedKBSAnalyzer
 from neo4j import GraphDatabase
+from openai import OpenAI
 from pymilvus import (
     connections,
     Collection,
@@ -158,6 +159,69 @@ def analysis_code(extract_dir, source_name):
     
     return result
 
+def generate_code_chunk_description(code_data, file_name=None):
+    """
+    为代码块生成description
+    
+    Args:
+        code_data: 代码内容
+        file_name: 文件名（可选）
+        
+    Returns:
+        description字符串，如果生成失败返回None
+    """
+    try:
+        # 限制代码长度，避免prompt过长
+        code_preview = code_data[:2000] if len(code_data) > 2000 else code_data
+        
+        user_prompt = f"""
+请分析以下代码块的功能和作用，用简洁的中文描述（100字以内）：
+
+文件: {file_name if file_name else "未知文件"}
+
+代码:
+```python
+{code_preview}
+```
+
+请返回JSON格式：
+{{"description": "代码功能描述"}}
+
+注意：只返回JSON数据，不要返回其他内容。
+"""
+        
+        client = OpenAI(
+            api_key=CHAT_MODEL_API_KEY,
+            base_url=CHAT_URL,
+        )
+        
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        response = client.chat.completions.create(
+            model=CHAT_MODEL_NAME,
+            messages=messages,
+            response_format={'type': 'json_object'},
+            temperature=0,
+            stream=False
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        description = result.get("description", "")
+        
+        if description:
+            logger.info(f"[generate_code_chunk_description] 成功生成description，长度={len(description)}")
+            return description
+        else:
+            logger.warning(f"[generate_code_chunk_description] description为空")
+            return None
+            
+    except Exception as e:
+        logger.error(f"[generate_code_chunk_description] 生成description失败: {e}")
+        return None
+
 def handle_json_file(data, insert_number):
     behind_uuid = str(uuid.uuid4())
     software_uuid = f"software-{behind_uuid}"
@@ -262,16 +326,32 @@ def handle_json_file(data, insert_number):
                     code_index += 1
                     continue
                 
-                # 从 ttp_map 中获取与当前代码块关联的技术信息
+                # 为所有代码块生成description
+                description = generate_code_chunk_description(code_data, file_name)
+                
+                # 从 ttp_map 中获取与当前代码块关联的技术信息（保留技术关联信息）
+                # 注释掉原有的description获取逻辑，改为为所有代码块生成description
+                # # 从 ttp_map 中获取与当前代码块关联的技术信息
+                # ttp = ttp_map.get(chunk_number)
+                # if ttp:
+                #     # 使用 LLM 返回的代码相关性描述作为 description
+                #     description = ttp.get("code_relevance") or ttp.get("name")
+                #     technique_id = ttp.get("technique_id")
+                #     have_code = ttp.get("have_code", False)
+                #     relevance = ttp.get("relevance")
+                # else:
+                #     description = None
+                #     technique_id = None
+                #     have_code = False
+                #     relevance = None
+                
+                # 从 ttp_map 中获取技术关联信息（但不覆盖description）
                 ttp = ttp_map.get(chunk_number)
                 if ttp:
-                    # 使用 LLM 返回的代码相关性描述作为 description
-                    description = ttp.get("code_relevance") or ttp.get("name")
                     technique_id = ttp.get("technique_id")
                     have_code = ttp.get("have_code", False)
                     relevance = ttp.get("relevance")
                 else:
-                    description = None
                     technique_id = None
                     have_code = False
                     relevance = None

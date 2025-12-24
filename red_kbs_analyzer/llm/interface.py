@@ -203,6 +203,8 @@ class LLMInterface:
     def _get_prompt(self, task: str, metadata: Dict[str, Any]) -> Optional[str]:
         """获取prompt模板"""
         if task == "get_summary_red_tool":
+            readme_content=metadata.get("readme_content", "")
+            logger.info(f"readme：{readme_content}")
             return self.prompt_templates.get_summary_prompt(
                 readme_content=metadata.get("readme_content", ""),
                 file_tree=metadata.get("file_tree", "")
@@ -223,7 +225,6 @@ class LLMInterface:
                 software_tactics=metadata.get("software_tactics", {}),
                 file_path=metadata.get("file_path", "")
             )
-        
         else:
             self.logger.error(f"未知的任务类型: {task}")
             return None
