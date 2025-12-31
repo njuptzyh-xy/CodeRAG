@@ -2,6 +2,7 @@ import os
 import json
 import re
 import asyncio
+import random
 from typing import Dict, List, Any, Callable, Awaitable
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -37,6 +38,7 @@ MAX_FILE_PROMPT_LENGTH = 100000  # Prompt 最大字符数（约 25000 tokens）
 async def _call_with_key_pool(func: Callable[[str], Awaitable[Any]]) -> Any:
     """
     使用号池调用 Claude API，支持失败重试
+    第一次随机选择一个 key，失败后按顺序尝试剩余的 key
     
     Args:
         func: 接受 key 作为参数的异步函数，返回结果
@@ -47,11 +49,27 @@ async def _call_with_key_pool(func: Callable[[str], Awaitable[Any]]) -> Any:
     Raises:
         最后一次尝试的异常
     """
-    max_retries = len(key_pool.keys)  # 最多重试所有 key 的数量
+    # 获取所有可用的 key（排除临时失效的）
+    with key_pool.lock:
+        available_keys = [k for k in key_pool.keys if k not in key_pool.failed_keys]
+        
+        if not available_keys:
+            # 所有 key 都失效了，重置并使用所有 key
+            logger.warning("[Claude Code] 所有 key 都失效，重置失败列表")
+            key_pool.failed_keys.clear()
+            available_keys = key_pool.keys.copy()
+    
+    # 随机打乱可用 key 列表（第一次随机选择）
+    keys_to_try = available_keys.copy()
+    random.shuffle(keys_to_try)
+    
+    max_retries = len(keys_to_try)
     last_error = None
     
+    logger.info(f"[Claude Code] 随机选择 key 顺序，共 {max_retries} 个 key")
+    
     for attempt in range(max_retries):
-        key = key_pool.get_key()
+        key = keys_to_try[attempt]
         logger.info(f"[Claude Code] 使用 Key {attempt + 1}/{max_retries} (key: {key[:20]}...)")
         
         try:
