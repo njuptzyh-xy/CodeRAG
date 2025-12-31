@@ -2,12 +2,27 @@ import os
 import json
 import re
 import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Callable, Awaitable
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 from ..run_logs.logger import logger
 from ..models.project import RedTool
+from .key_pool import ClaudeKeyPool
+
+# 导入配置
+try:
+    from setting import CLAUDE_API_KEYS
+except ImportError:
+    # 如果无法导入，使用默认值
+    CLAUDE_API_KEYS = [
+        "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
+        "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
+        "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
+    ]
+
+# 创建全局号池实例
+key_pool = ClaudeKeyPool(CLAUDE_API_KEYS)
 
 
 PROJECT_ROOT = os.path.abspath("/root/workspace/ch")
@@ -18,6 +33,58 @@ MAX_FILES = 5
 MAX_FILE_TREE_LENGTH = 15000  # 文件树最大字符数（约 3750 tokens）
 MAX_PROMPT_LENGTH = 30000  # Prompt 最大字符数（约 7500 tokens）
 MAX_FILE_PROMPT_LENGTH = 100000  # Prompt 最大字符数（约 25000 tokens）
+
+async def _call_with_key_pool(func: Callable[[str], Awaitable[Any]]) -> Any:
+    """
+    使用号池调用 Claude API，支持失败重试
+    
+    Args:
+        func: 接受 key 作为参数的异步函数，返回结果
+    
+    Returns:
+        函数返回值
+    
+    Raises:
+        最后一次尝试的异常
+    """
+    max_retries = len(key_pool.keys)  # 最多重试所有 key 的数量
+    last_error = None
+    
+    for attempt in range(max_retries):
+        key = key_pool.get_key()
+        logger.info(f"[Claude Code] 使用 Key {attempt + 1}/{max_retries} (key: {key[:20]}...)")
+        
+        try:
+            result = await func(key)
+            key_pool.mark_success(key)
+            return result
+        except Exception as e:
+            error_msg = str(e)
+            last_error = e
+            key_pool.mark_failed(key, error_msg)
+            
+            # 判断是否应该重试
+            # Token 限制错误不应该重试（换 key 也没用）
+            is_token_error = (
+                "maximum context length" in error_msg.lower() or
+                "context length" in error_msg.lower() or
+                "131072" in error_msg
+            )
+            
+            should_retry = not is_token_error and attempt < max_retries - 1
+            
+            if should_retry:
+                logger.warning(f"[Claude Code] Key 失败，尝试下一个 key: {error_msg[:100]}")
+                continue
+            else:
+                # 不应该重试的错误或最后一次尝试，直接抛出
+                if is_token_error:
+                    logger.error(f"[Claude Code] Token 限制错误，不重试: {error_msg}")
+                raise
+    
+    # 所有 key 都失败了
+    logger.error(f"[Claude Code] 所有 key 都失败，最后一次错误: {last_error}")
+    raise last_error
 
 def _resolve_target_dir(project_path: str) -> str:
     project_path_abs = os.path.abspath(project_path)
@@ -93,192 +160,197 @@ async def generate_project_summary_with_claude(project: RedTool, processed_files
         footer = prompt[-2000:] if len(prompt) > 2000 else prompt  # 保留后2000字符
         prompt = header + "\n... (提示内容已截断) ...\n" + footer
 
-    options = ClaudeAgentOptions(
-        cwd=PROJECT_ROOT,
-        add_dirs=[PROJECT_ROOT, target_dir],
-        allowed_tools=["Read", "ListDir", "Glob"],
-        system_prompt="You are a helpful coding assistant specialized in summarizing projects and identifying key files.",
-        env={
-            "ANTHROPIC_AUTH_TOKEN": "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
-            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
-            "ANTHROPIC_MODEL": "glm-4.7",
-            "API_TIMEOUT_MS": "3000000",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        },
-    )
+    # 定义内部函数，使用号池调用
+    async def _call_with_key(key: str) -> Dict[str, any]:
+        options = ClaudeAgentOptions(
+            cwd=PROJECT_ROOT,
+            add_dirs=[PROJECT_ROOT, target_dir],
+            allowed_tools=["Read", "ListDir", "Glob"],
+            system_prompt="You are a helpful coding assistant specialized in summarizing projects and identifying key files.",
+            env={
+                "ANTHROPIC_AUTH_TOKEN": key,
+                "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                "ANTHROPIC_MODEL": "glm-4.7",
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+        )
 
-    full_response = ""
-    found_end_marker = False
-    found_aup_error = False  # 添加 AUP 错误标志
-    message_count = 0
-    
-    # AUP 检测关键词
-    aup_keywords = [
-        "Usage Policy",
-        "unable to respond to this request",
-        "violate our Usage Policy",
-        "API Error",
-        "aup"
-    ]
+        full_response = ""
+        found_end_marker = False
+        found_aup_error = False  # 添加 AUP 错误标志
+        message_count = 0
+        
+        # AUP 检测关键词
+        aup_keywords = [
+            "Usage Policy",
+            "unable to respond to this request",
+            "violate our Usage Policy",
+            "API Error",
+            "aup"
+        ]
 
-    logger.info(f"[Claude Code] 初始化 Claude SDK 客户端，工作目录: {PROJECT_ROOT}, 添加目录: {[PROJECT_ROOT, target_dir]}")
-    logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符，文件树长度: {len(file_tree)} 字符")
-    async with ClaudeSDKClient(options=options) as client:
-        logger.info(f"[Claude Code] 发送 prompt 到 Claude，prompt 长度: {len(prompt)} 字符")
-        try:
-            await client.query(prompt=prompt)
-        except Exception as exc:
-            error_msg = str(exc)
-            if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
-                logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
-                logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符，文件树原始长度: {original_tree_length} 字符")
-                raise ValueError(f"请求内容过长，超出模型 token 限制。请减少文件树或 prompt 长度。原始错误: {error_msg}")
-            raise
-        logger.info(f"[Claude Code] 开始接收 Claude 响应消息...")
-        async for message in client.receive_messages():
-            message_count += 1
-            logger.debug(f"[Claude Code] 收到第 {message_count} 条消息")
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        text = block.text
-                        # 调试：打印 text 的实际值和类型
-                        logger.debug(f"[Claude Code] block.text 类型: {type(text)}, 值: {repr(text)}, 长度: {len(text) if text else 0}")
-                        
-                        # 检查 text 是否为 None、空字符串或 "(no content)"
-                        if text is None:
-                            logger.warning(f"[Claude Code] block.text 为 None，跳过")
-                            continue
-                        if text == "(no content)":
-                            logger.warning(f"[Claude Code] 收到 '(no content)' 字符串，跳过")
-                            continue
-                        if not text.strip():
-                            logger.debug(f"[Claude Code] block.text 为空字符串，跳过")
-                            continue
+        logger.info(f"[Claude Code] 初始化 Claude SDK 客户端，工作目录: {PROJECT_ROOT}, 添加目录: {[PROJECT_ROOT, target_dir]}")
+        logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符，文件树长度: {len(file_tree)} 字符")
+        async with ClaudeSDKClient(options=options) as client:
+            logger.info(f"[Claude Code] 发送 prompt 到 Claude，prompt 长度: {len(prompt)} 字符")
+            try:
+                await client.query(prompt=prompt)
+            except Exception as exc:
+                error_msg = str(exc)
+                if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
+                    logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
+                    logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符，文件树原始长度: {original_tree_length} 字符")
+                    raise ValueError(f"请求内容过长，超出模型 token 限制。请减少文件树或 prompt 长度。原始错误: {error_msg}")
+                raise
+            logger.info(f"[Claude Code] 开始接收 Claude 响应消息...")
+            async for message in client.receive_messages():
+                message_count += 1
+                logger.debug(f"[Claude Code] 收到第 {message_count} 条消息")
+                if hasattr(message, "content"):
+                    for block in message.content:
+                        if hasattr(block, "text"):
+                            text = block.text
+                            # 调试：打印 text 的实际值和类型
+                            logger.debug(f"[Claude Code] block.text 类型: {type(text)}, 值: {repr(text)}, 长度: {len(text) if text else 0}")
                             
-                        full_response += text
-                        print(text, end="", flush=True)
-                        logger.debug(f"[Claude Code] 累积响应长度: {len(full_response)} 字符")
-                        
-                        # 实时检测 AUP 拒绝错误
-                        if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-                            logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
-                            found_aup_error = True
-                            break
-                        
-                        # 原有的 JSON 结束标记检测
-                        if '}' in text and '"summary"' in full_response:
-                            if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
-                                found_end_marker = True
-                                logger.info(f"[Claude Code] 检测到 JSON 结束标记，总响应长度: {len(full_response)} 字符")
-                                await asyncio.sleep(0.3)
+                            # 检查 text 是否为 None、空字符串或 "(no content)"
+                            if text is None:
+                                logger.warning(f"[Claude Code] block.text 为 None，跳过")
+                                continue
+                            if text == "(no content)":
+                                logger.warning(f"[Claude Code] 收到 '(no content)' 字符串，跳过")
+                                continue
+                            if not text.strip():
+                                logger.debug(f"[Claude Code] block.text 为空字符串，跳过")
+                                continue
+                                
+                            full_response += text
+                            print(text, end="", flush=True)
+                            logger.debug(f"[Claude Code] 累积响应长度: {len(full_response)} 字符")
+                            
+                            # 实时检测 AUP 拒绝错误
+                            if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+                                logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
+                                found_aup_error = True
                                 break
-                if found_end_marker or found_aup_error:
-                    break
-        print()  # 换行
-        logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
+                            
+                            # 原有的 JSON 结束标记检测
+                            if '}' in text and '"summary"' in full_response:
+                                if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
+                                    found_end_marker = True
+                                    logger.info(f"[Claude Code] 检测到 JSON 结束标记，总响应长度: {len(full_response)} 字符")
+                                    await asyncio.sleep(0.3)
+                                    break
+                    if found_end_marker or found_aup_error:
+                        break
+            print()  # 换行
+            logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
 
-    # 检测 AUP 拒绝情况（保留作为双重检查）
-    if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-        logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，响应内容前500字符: {full_response[:500]}")
-        return {
-            "summary": "",
-            "files": []
-        }
+        # 检测 AUP 拒绝情况（保留作为双重检查）
+        if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，响应内容前500字符: {full_response[:500]}")
+            return {
+                "summary": "",
+                "files": []
+            }
 
-    # 解析 JSON
-    logger.info(f"[Claude Code] 开始解析 JSON 响应...")
-    json_str = None
-    json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1)
-        logger.info(f"[Claude Code] 使用第一种模式匹配到 JSON（```json 格式），长度: {len(json_str)} 字符")
-    else:
-        json_match = re.search(r'```\s*(\{.*?"summary".*?\})\s*```', full_response, re.DOTALL)
+        # 解析 JSON
+        logger.info(f"[Claude Code] 开始解析 JSON 响应...")
+        json_str = None
+        json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
-            logger.info(f"[Claude Code] 使用第二种模式匹配到 JSON（``` 格式），长度: {len(json_str)} 字符")
+            logger.info(f"[Claude Code] 使用第一种模式匹配到 JSON（```json 格式），长度: {len(json_str)} 字符")
         else:
-            start_pos = full_response.find('"summary"')
-            if start_pos != -1:
-                logger.info(f"[Claude Code] 使用第三种模式查找 JSON，找到 'summary' 位置: {start_pos}")
-                brace_start = full_response.rfind('{', 0, start_pos)
-                if brace_start != -1:
-                    brace_count = 0
-                    brace_end = -1
-                    for i in range(brace_start, len(full_response)):
-                        if full_response[i] == '{':
-                            brace_count += 1
-                        elif full_response[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                brace_end = i
-                                break
-                    if brace_end != -1:
-                        json_str = full_response[brace_start:brace_end + 1]
-                        logger.info(f"[Claude Code] 使用第三种模式提取到 JSON，位置: {brace_start}-{brace_end}，长度: {len(json_str)} 字符")
-
-    if not json_str:
-        logger.warning(f"[Claude Code] 未找到 JSON 格式的摘要返回，响应内容前500字符: {full_response[:500]}")
-        # 不再抛异常，返回空结果交给上层保底
-        return {
-            "summary": "",
-            "files": []
-        }
-
-    logger.info(f"[Claude Code] 开始解析 JSON 字符串...")
-    try:
-        data = json.loads(json_str)
-    except Exception as e:
-        logger.error(f"[Claude Code] JSON 解析失败: {e}，json_str 前 500 字符: {json_str[:500]}")
-        # 不再抛异常，返回空结果交给上层保底
-        return {
-            "summary": "",
-            "files": []
-        }
-
-    if not isinstance(data, dict):
-        logger.error(f"[Claude Code] JSON 根节点不是对象类型，实际类型: {type(data)}")
-        return {
-            "summary": "",
-            "files": []
-        }
-
-    summary = data.get("summary", "") or ""
-    files = data.get("important_files", []) or []
-    logger.info(f"[Claude Code] JSON 解析成功，摘要长度: {len(summary)} 字符，重要文件数量: {len(files)}")
-
-    validated_files = []
-    logger.info(f"[Claude Code] 开始验证文件路径，待验证文件数: {len(files) if files else 0}")
-    for idx, file_path in enumerate(files or [], 1):
-        logger.debug(f"[Claude Code] 验证文件 {idx}/{len(files) if files else 0}: {file_path}")
-        if isinstance(file_path, str):
-            if os.path.isabs(file_path) and os.path.exists(file_path):
-                validated_files.append(os.path.abspath(file_path))
-                logger.info(f"[Claude Code] 文件验证成功（绝对路径）: {os.path.abspath(file_path)}")
+            json_match = re.search(r'```\s*(\{.*?"summary".*?\})\s*```', full_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                logger.info(f"[Claude Code] 使用第二种模式匹配到 JSON（``` 格式），长度: {len(json_str)} 字符")
             else:
-                potential_path = os.path.join(target_dir, file_path.lstrip('/'))
-                if os.path.exists(potential_path):
-                    validated_files.append(os.path.abspath(potential_path))
-                    logger.info(f"[Claude Code] 文件验证成功（相对目标目录）: {os.path.abspath(potential_path)}")
+                start_pos = full_response.find('"summary"')
+                if start_pos != -1:
+                    logger.info(f"[Claude Code] 使用第三种模式查找 JSON，找到 'summary' 位置: {start_pos}")
+                    brace_start = full_response.rfind('{', 0, start_pos)
+                    if brace_start != -1:
+                        brace_count = 0
+                        brace_end = -1
+                        for i in range(brace_start, len(full_response)):
+                            if full_response[i] == '{':
+                                brace_count += 1
+                            elif full_response[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    brace_end = i
+                                    break
+                        if brace_end != -1:
+                            json_str = full_response[brace_start:brace_end + 1]
+                            logger.info(f"[Claude Code] 使用第三种模式提取到 JSON，位置: {brace_start}-{brace_end}，长度: {len(json_str)} 字符")
+
+        if not json_str:
+            logger.warning(f"[Claude Code] 未找到 JSON 格式的摘要返回，响应内容前500字符: {full_response[:500]}")
+            # 不再抛异常，返回空结果交给上层保底
+            return {
+                "summary": "",
+                "files": []
+            }
+
+        logger.info(f"[Claude Code] 开始解析 JSON 字符串...")
+        try:
+            data = json.loads(json_str)
+        except Exception as e:
+            logger.error(f"[Claude Code] JSON 解析失败: {e}，json_str 前 500 字符: {json_str[:500]}")
+            # 不再抛异常，返回空结果交给上层保底
+            return {
+                "summary": "",
+                "files": []
+            }
+
+        if not isinstance(data, dict):
+            logger.error(f"[Claude Code] JSON 根节点不是对象类型，实际类型: {type(data)}")
+            return {
+                "summary": "",
+                "files": []
+            }
+
+        summary = data.get("summary", "") or ""
+        files = data.get("important_files", []) or []
+        logger.info(f"[Claude Code] JSON 解析成功，摘要长度: {len(summary)} 字符，重要文件数量: {len(files)}")
+
+        validated_files = []
+        logger.info(f"[Claude Code] 开始验证文件路径，待验证文件数: {len(files) if files else 0}")
+        for idx, file_path in enumerate(files or [], 1):
+            logger.debug(f"[Claude Code] 验证文件 {idx}/{len(files) if files else 0}: {file_path}")
+            if isinstance(file_path, str):
+                if os.path.isabs(file_path) and os.path.exists(file_path):
+                    validated_files.append(os.path.abspath(file_path))
+                    logger.info(f"[Claude Code] 文件验证成功（绝对路径）: {os.path.abspath(file_path)}")
                 else:
-                    potential_path = os.path.join(PROJECT_ROOT, file_path.lstrip('/'))
+                    potential_path = os.path.join(target_dir, file_path.lstrip('/'))
                     if os.path.exists(potential_path):
                         validated_files.append(os.path.abspath(potential_path))
-                        logger.info(f"[Claude Code] 文件验证成功（相对项目根目录）: {os.path.abspath(potential_path)}")
+                        logger.info(f"[Claude Code] 文件验证成功（相对目标目录）: {os.path.abspath(potential_path)}")
                     else:
-                        logger.warning(f"[Claude Code] 文件验证失败，未找到文件: {file_path}")
-        if len(validated_files) >= MAX_FILES:
-            logger.info(f"[Claude Code] 已达到最大文件数限制 ({MAX_FILES})，停止验证")
-            break
+                        potential_path = os.path.join(PROJECT_ROOT, file_path.lstrip('/'))
+                        if os.path.exists(potential_path):
+                            validated_files.append(os.path.abspath(potential_path))
+                            logger.info(f"[Claude Code] 文件验证成功（相对项目根目录）: {os.path.abspath(potential_path)}")
+                        else:
+                            logger.warning(f"[Claude Code] 文件验证失败，未找到文件: {file_path}")
+            if len(validated_files) >= MAX_FILES:
+                logger.info(f"[Claude Code] 已达到最大文件数限制 ({MAX_FILES})，停止验证")
+                break
 
-    logger.info(f"[Claude Code] 文件验证完成，有效文件数: {len(validated_files)}/{len(files) if files else 0}")
-    result = {
-        "summary": summary or "",
-        "files": validated_files
-    }
-    logger.info(f"[Claude Code] 生成项目摘要完成，返回结果包含 {len(validated_files)} 个文件")
-    return result
+        logger.info(f"[Claude Code] 文件验证完成，有效文件数: {len(validated_files)}/{len(files) if files else 0}")
+        result = {
+            "summary": summary or "",
+            "files": validated_files
+        }
+        logger.info(f"[Claude Code] 生成项目摘要完成，返回结果包含 {len(validated_files)} 个文件")
+        return result
+    
+    # 使用号池调用
+    return await _call_with_key_pool(_call_with_key)
 
 
 async def identify_main_files_with_claude(project: RedTool, processed_files: List[Dict[str, any]]) -> List[str]:
@@ -326,136 +398,141 @@ async def identify_main_files_with_claude(project: RedTool, processed_files: Lis
         footer = prompt[-1000:] if len(prompt) > 1000 else prompt  # 保留后1000字符
         prompt = header + "\n... (提示内容已截断) ...\n" + footer
 
-    options = ClaudeAgentOptions(
-        cwd=PROJECT_ROOT,
-        add_dirs=[PROJECT_ROOT, target_dir],
-        allowed_tools=["Read", "ListDir", "Glob"],
-        system_prompt="You are a helpful coding assistant specialized in analyzing codebases and identifying important files.",
-        env={
-            "ANTHROPIC_AUTH_TOKEN": "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
-            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
-            "ANTHROPIC_MODEL": "glm-4.7",
-            "API_TIMEOUT_MS": "3000000",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        },
-    )
+    # 定义内部函数，使用号池调用
+    async def _call_with_key(key: str) -> List[str]:
+        options = ClaudeAgentOptions(
+            cwd=PROJECT_ROOT,
+            add_dirs=[PROJECT_ROOT, target_dir],
+            allowed_tools=["Read", "ListDir", "Glob"],
+            system_prompt="You are a helpful coding assistant specialized in analyzing codebases and identifying important files.",
+            env={
+                "ANTHROPIC_AUTH_TOKEN": key,
+                "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                "ANTHROPIC_MODEL": "glm-4.7",
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+        )
 
-    important_files: List[str] = []
-    full_response = ""
-    found_end_marker = False
-    found_aup_error = False  # 添加 AUP 错误标志
-    
-    # AUP 检测关键词
-    aup_keywords = [
-        "Usage Policy",
-        "unable to respond to this request",
-        "violate our Usage Policy",
-        "API Error",
-        "aup"
-    ]
-
-    logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
-    async with ClaudeSDKClient(options=options) as client:
-        try:
-            await client.query(prompt=prompt)
-        except Exception as exc:
-            error_msg = str(exc)
-            if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
-                logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
-                logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
-                raise ValueError(f"请求内容过长，超出模型 token 限制。请减少 prompt 长度。原始错误: {error_msg}")
-            raise
-        async for message in client.receive_messages():
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        text = block.text
-                        # 调试：打印 text 的实际值和类型
-                        logger.debug(f"[Claude Code] block.text 类型: {type(text)}, 值: {repr(text)}, 长度: {len(text) if text else 0}")
-                        
-                        # 检查 text 是否为 None、空字符串或 "(no content)"
-                        if text is None:
-                            logger.warning(f"[Claude Code] block.text 为 None，跳过")
-                            continue
-                        if text == "(no content)":
-                            logger.warning(f"[Claude Code] 收到 '(no content)' 字符串，跳过")
-                            continue
-                        if not text.strip():
-                            logger.debug(f"[Claude Code] block.text 为空字符串，跳过")
-                            continue
-                            
-                        full_response += text
-                        print(text, end="", flush=True)
-                        
-                        # 实时检测 AUP 拒绝错误
-                        if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-                            logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
-                            found_aup_error = True
-                            break
-                        
-                        # 原有的 JSON 结束标记检测
-                        if '}' in text and '"important_files"' in full_response:
-                            if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
-                                found_end_marker = True
-                                await asyncio.sleep(0.5)
-                                break
-                if found_end_marker or found_aup_error:
-                    break
-        print()  # 换行
+        important_files: List[str] = []
+        full_response = ""
+        found_end_marker = False
+        found_aup_error = False  # 添加 AUP 错误标志
         
-    # 检测 AUP 拒绝情况（保留作为双重检查）
-    if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-        logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，返回空文件列表")
-        return []
+        # AUP 检测关键词
+        aup_keywords = [
+            "Usage Policy",
+            "unable to respond to this request",
+            "violate our Usage Policy",
+            "API Error",
+            "aup"
+        ]
 
-    # 解析 JSON
-    json_str = None
-    json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_match = re.search(r'```\s*(\{.*?"important_files".*?\})\s*```', full_response, re.DOTALL)
+        logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
+        async with ClaudeSDKClient(options=options) as client:
+            try:
+                await client.query(prompt=prompt)
+            except Exception as exc:
+                error_msg = str(exc)
+                if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
+                    logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
+                    logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
+                    raise ValueError(f"请求内容过长，超出模型 token 限制。请减少 prompt 长度。原始错误: {error_msg}")
+                raise
+            async for message in client.receive_messages():
+                if hasattr(message, "content"):
+                    for block in message.content:
+                        if hasattr(block, "text"):
+                            text = block.text
+                            # 调试：打印 text 的实际值和类型
+                            logger.debug(f"[Claude Code] block.text 类型: {type(text)}, 值: {repr(text)}, 长度: {len(text) if text else 0}")
+                            
+                            # 检查 text 是否为 None、空字符串或 "(no content)"
+                            if text is None:
+                                logger.warning(f"[Claude Code] block.text 为 None，跳过")
+                                continue
+                            if text == "(no content)":
+                                logger.warning(f"[Claude Code] 收到 '(no content)' 字符串，跳过")
+                                continue
+                            if not text.strip():
+                                logger.debug(f"[Claude Code] block.text 为空字符串，跳过")
+                                continue
+                                
+                            full_response += text
+                            print(text, end="", flush=True)
+                            
+                            # 实时检测 AUP 拒绝错误
+                            if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+                                logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
+                                found_aup_error = True
+                                break
+                            
+                            # 原有的 JSON 结束标记检测
+                            if '}' in text and '"important_files"' in full_response:
+                                if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
+                                    found_end_marker = True
+                                    await asyncio.sleep(0.5)
+                                    break
+                    if found_end_marker or found_aup_error:
+                        break
+            print()  # 换行
+            
+        # 检测 AUP 拒绝情况（保留作为双重检查）
+        if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，返回空文件列表")
+            return []
+
+        # 解析 JSON
+        json_str = None
+        json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
         else:
-            start_pos = full_response.find('"important_files"')
-            if start_pos != -1:
-                brace_start = full_response.rfind('{', 0, start_pos)
-                if brace_start != -1:
-                    brace_count = 0
-                    brace_end = -1
-                    for i in range(brace_start, len(full_response)):
-                        if full_response[i] == '{':
-                            brace_count += 1
-                        elif full_response[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                brace_end = i
-                                break
-                    if brace_end != -1:
-                        json_str = full_response[brace_start:brace_end + 1]
+            json_match = re.search(r'```\s*(\{.*?"important_files".*?\})\s*```', full_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                start_pos = full_response.find('"important_files"')
+                if start_pos != -1:
+                    brace_start = full_response.rfind('{', 0, start_pos)
+                    if brace_start != -1:
+                        brace_count = 0
+                        brace_end = -1
+                        for i in range(brace_start, len(full_response)):
+                            if full_response[i] == '{':
+                                brace_count += 1
+                            elif full_response[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    brace_end = i
+                                    break
+                        if brace_end != -1:
+                            json_str = full_response[brace_start:brace_end + 1]
 
-    if not json_str:
-        raise ValueError("未找到 JSON 格式的文件列表")
+        if not json_str:
+            raise ValueError("未找到 JSON 格式的文件列表")
 
-    data = json.loads(json_str)
-    if "important_files" in data and isinstance(data["important_files"], list):
-        for file_path in data["important_files"]:
-            if isinstance(file_path, str):
-                if os.path.isabs(file_path) and os.path.exists(file_path):
-                    important_files.append(os.path.abspath(file_path))
-                elif file_path:
-                    potential_path = os.path.join(target_dir, file_path.lstrip('/'))
-                    if os.path.exists(potential_path):
-                        important_files.append(os.path.abspath(potential_path))
-                    else:
-                        potential_path = os.path.join(PROJECT_ROOT, file_path.lstrip('/'))
+        data = json.loads(json_str)
+        if "important_files" in data and isinstance(data["important_files"], list):
+            for file_path in data["important_files"]:
+                if isinstance(file_path, str):
+                    if os.path.isabs(file_path) and os.path.exists(file_path):
+                        important_files.append(os.path.abspath(file_path))
+                    elif file_path:
+                        potential_path = os.path.join(target_dir, file_path.lstrip('/'))
                         if os.path.exists(potential_path):
                             important_files.append(os.path.abspath(potential_path))
-            if len(important_files) >= MAX_FILES:
-                break
+                        else:
+                            potential_path = os.path.join(PROJECT_ROOT, file_path.lstrip('/'))
+                            if os.path.exists(potential_path):
+                                important_files.append(os.path.abspath(potential_path))
+                if len(important_files) >= MAX_FILES:
+                    break
 
-    return important_files[:MAX_FILES]
+        return important_files[:MAX_FILES]
+    
+    # 使用号池调用
+    return await _call_with_key_pool(_call_with_key)
 
 
 async def analyze_file_technique_with_claude(
@@ -489,170 +566,175 @@ async def analyze_file_technique_with_claude(
         # footer = prompt[-2000:] if len(prompt) > 2000 else prompt  # 保留后2000字符
         # prompt = header + "\n... (提示内容已截断) ...\n" + footer
     
-    options = ClaudeAgentOptions(
-        cwd=PROJECT_ROOT,
-        add_dirs=[PROJECT_ROOT, target_dir, file_dir],
-        allowed_tools=["Read", "ListDir", "Glob"],
-        system_prompt="You are a helpful coding assistant specialized in analyzing code for MITRE ATT&CK techniques.",
-        env={
-            "ANTHROPIC_AUTH_TOKEN": "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
-            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
-            "ANTHROPIC_MODEL": "glm-4.7",
-            "API_TIMEOUT_MS": "3000000",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        },
-    )
-    
-    full_response = ""
-    found_end_marker = False
-    found_aup_error = False
-    message_count = 0
-    
-    # AUP 检测关键词
-    aup_keywords = [
-        "Usage Policy",
-        "unable to respond to this request",
-        "violate our Usage Policy",
-        "API Error",
-        "aup"
-    ]
-    
-    logger.info(f"[Claude Code] 开始分析文件技术: {file_path}")
-    logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
-    
-    async with ClaudeSDKClient(options=options) as client:
-        try:
-            await client.query(prompt=prompt)
-        except Exception as exc:
-            error_msg = str(exc)
-            if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
-                logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
-                logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
-                return {
-                    "result": False,
-                    "ttps": [],
-                    "status": "failed",
-                    "error": "Token limit exceeded"
-                }
-            raise
+    # 定义内部函数，使用号池调用
+    async def _call_with_key(key: str) -> Dict[str, Any]:
+        options = ClaudeAgentOptions(
+            cwd=PROJECT_ROOT,
+            add_dirs=[PROJECT_ROOT, target_dir, file_dir],
+            allowed_tools=["Read", "ListDir", "Glob"],
+            system_prompt="You are a helpful coding assistant specialized in analyzing code for MITRE ATT&CK techniques.",
+            env={
+                "ANTHROPIC_AUTH_TOKEN": key,
+                "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+                "ANTHROPIC_MODEL": "glm-4.7",
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+        )
         
-        logger.info(f"[Claude Code] 开始接收 Claude 响应消息...")
-        async for message in client.receive_messages():
-            message_count += 1
-            logger.debug(f"[Claude Code] 收到第 {message_count} 条消息")
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        text = block.text
-                        if text is None or text == "(no content)" or not text.strip():
-                            continue
-                        
-                        full_response += text
-                        print(text, end="", flush=True)
-                        logger.debug(f"[Claude Code] 累积响应长度: {len(full_response)} 字符")
-                        
-                        # 实时检测 AUP 拒绝错误
-                        if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-                            logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
-                            found_aup_error = True
-                            break
-                        
-                        # 检测 JSON 结束标记（查找 "ttps" 字段）
-                        if '}' in text and '"ttps"' in full_response:
-                            if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
-                                found_end_marker = True
-                                logger.info(f"[Claude Code] 检测到 JSON 结束标记，总响应长度: {len(full_response)} 字符")
-                                await asyncio.sleep(0.3)
+        full_response = ""
+        found_end_marker = False
+        found_aup_error = False
+        message_count = 0
+        
+        # AUP 检测关键词
+        aup_keywords = [
+            "Usage Policy",
+            "unable to respond to this request",
+            "violate our Usage Policy",
+            "API Error",
+            "aup"
+        ]
+        
+        logger.info(f"[Claude Code] 开始分析文件技术: {file_path}")
+        logger.info(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
+        
+        async with ClaudeSDKClient(options=options) as client:
+            try:
+                await client.query(prompt=prompt)
+            except Exception as exc:
+                error_msg = str(exc)
+                if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
+                    logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
+                    logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
+                    return {
+                        "result": False,
+                        "ttps": [],
+                        "status": "failed",
+                        "error": "Token limit exceeded"
+                    }
+                raise
+            
+            logger.info(f"[Claude Code] 开始接收 Claude 响应消息...")
+            async for message in client.receive_messages():
+                message_count += 1
+                logger.debug(f"[Claude Code] 收到第 {message_count} 条消息")
+                if hasattr(message, "content"):
+                    for block in message.content:
+                        if hasattr(block, "text"):
+                            text = block.text
+                            if text is None or text == "(no content)" or not text.strip():
+                                continue
+                            
+                            full_response += text
+                            print(text, end="", flush=True)
+                            logger.debug(f"[Claude Code] 累积响应长度: {len(full_response)} 字符")
+                            
+                            # 实时检测 AUP 拒绝错误
+                            if any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+                                logger.warning(f"[Claude Code] 在接收消息时检测到 AUP 拒绝响应，立即退出循环")
+                                found_aup_error = True
                                 break
-                if found_end_marker or found_aup_error:
-                    break
-        print()  # 换行
-        logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
+                            
+                            # 检测 JSON 结束标记（查找 "ttps" 字段）
+                            if '}' in text and '"ttps"' in full_response:
+                                if full_response.count('{') > 0 and full_response.count('}') >= full_response.count('{'):
+                                    found_end_marker = True
+                                    logger.info(f"[Claude Code] 检测到 JSON 结束标记，总响应长度: {len(full_response)} 字符")
+                                    await asyncio.sleep(0.3)
+                                    break
+                    if found_end_marker or found_aup_error:
+                        break
+            print()  # 换行
+            logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
+        
+        # 检测 AUP 拒绝情况
+        if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应")
+            return {
+                "result": False,
+                "ttps": [],
+                "status": "failed",
+                "error": "AUP rejection"
+            }
     
-    # 检测 AUP 拒绝情况
-    if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-        logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应")
-        return {
-            "result": False,
-            "ttps": [],
-            "status": "failed",
-            "error": "AUP rejection"
-        }
-    
-    # 解析 JSON
-    logger.info(f"[Claude Code] 开始解析 JSON 响应...")
-    json_str = None
-    
-    # 策略1: 提取 ```json``` 代码块
-    json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1)
-        logger.info(f"[Claude Code] 使用第一种模式匹配到 JSON（```json 格式），长度: {len(json_str)} 字符")
-    else:
-        # 策略2: 提取 ``` 代码块
-        json_match = re.search(r'```\s*(\{.*?"ttps".*?\})\s*```', full_response, re.DOTALL)
+        # 解析 JSON
+        logger.info(f"[Claude Code] 开始解析 JSON 响应...")
+        json_str = None
+        
+        # 策略1: 提取 ```json``` 代码块
+        json_match = re.search(r'```json\s*(\{.*?\})\s*```', full_response, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
-            logger.info(f"[Claude Code] 使用第二种模式匹配到 JSON（``` 格式），长度: {len(json_str)} 字符")
+            logger.info(f"[Claude Code] 使用第一种模式匹配到 JSON（```json 格式），长度: {len(json_str)} 字符")
         else:
-            # 策略3: 直接查找 JSON 对象
-            start_pos = full_response.find('"ttps"')
-            if start_pos != -1:
-                logger.info(f"[Claude Code] 使用第三种模式查找 JSON，找到 'ttps' 位置: {start_pos}")
-                brace_start = full_response.rfind('{', 0, start_pos)
-                if brace_start != -1:
-                    brace_count = 0
-                    brace_end = -1
-                    for i in range(brace_start, len(full_response)):
-                        if full_response[i] == '{':
-                            brace_count += 1
-                        elif full_response[i] == '}':
-                            brace_count -= 1
-                            if brace_count == 0:
-                                brace_end = i
-                                break
-                    if brace_end != -1:
-                        json_str = full_response[brace_start:brace_end + 1]
-                        logger.info(f"[Claude Code] 使用第三种模式提取到 JSON，位置: {brace_start}-{brace_end}，长度: {len(json_str)} 字符")
-    
-    if not json_str:
-        logger.warning(f"[Claude Code] 未找到 JSON 格式的响应，响应内容前500字符: {full_response[:500]}")
+            # 策略2: 提取 ``` 代码块
+            json_match = re.search(r'```\s*(\{.*?"ttps".*?\})\s*```', full_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                logger.info(f"[Claude Code] 使用第二种模式匹配到 JSON（``` 格式），长度: {len(json_str)} 字符")
+            else:
+                # 策略3: 直接查找 JSON 对象
+                start_pos = full_response.find('"ttps"')
+                if start_pos != -1:
+                    logger.info(f"[Claude Code] 使用第三种模式查找 JSON，找到 'ttps' 位置: {start_pos}")
+                    brace_start = full_response.rfind('{', 0, start_pos)
+                    if brace_start != -1:
+                        brace_count = 0
+                        brace_end = -1
+                        for i in range(brace_start, len(full_response)):
+                            if full_response[i] == '{':
+                                brace_count += 1
+                            elif full_response[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    brace_end = i
+                                    break
+                        if brace_end != -1:
+                            json_str = full_response[brace_start:brace_end + 1]
+                            logger.info(f"[Claude Code] 使用第三种模式提取到 JSON，位置: {brace_start}-{brace_end}，长度: {len(json_str)} 字符")
+        
+        if not json_str:
+            logger.warning(f"[Claude Code] 未找到 JSON 格式的响应，响应内容前500字符: {full_response[:500]}")
+            return {
+                "result": False,
+                "ttps": [],
+                "status": "failed",
+                "error": "No JSON found"
+            }
+        
+        logger.info(f"[Claude Code] 开始解析 JSON 字符串...")
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"[Claude Code] JSON 解析失败: {e}，json_str 前 500 字符: {json_str[:500]}")
+            return {
+                "result": False,
+                "ttps": [],
+                "status": "failed",
+                "error": f"JSON decode error: {e}"
+            }
+        
+        if not isinstance(data, dict):
+            logger.error(f"[Claude Code] JSON 根节点不是对象类型，实际类型: {type(data)}")
+            return {
+                "result": False,
+                "ttps": [],
+                "status": "failed",
+                "error": "Invalid JSON structure"
+            }
+        
+        result = data.get("result", False)
+        ttps = data.get("ttps", [])
+        
+        logger.info(f"[Claude Code] JSON 解析成功，result: {result}，ttps 数量: {len(ttps)}")
+        
         return {
-            "result": False,
-            "ttps": [],
-            "status": "failed",
-            "error": "No JSON found"
+            "result": result,
+            "ttps": ttps,
+            # result为true就表示分析成功，即使ttps为空（表示没有发现技术，这也是合理的结果）
+            "status": "success" if result else "failed"
         }
     
-    logger.info(f"[Claude Code] 开始解析 JSON 字符串...")
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"[Claude Code] JSON 解析失败: {e}，json_str 前 500 字符: {json_str[:500]}")
-        return {
-            "result": False,
-            "ttps": [],
-            "status": "failed",
-            "error": f"JSON decode error: {e}"
-        }
-    
-    if not isinstance(data, dict):
-        logger.error(f"[Claude Code] JSON 根节点不是对象类型，实际类型: {type(data)}")
-        return {
-            "result": False,
-            "ttps": [],
-            "status": "failed",
-            "error": "Invalid JSON structure"
-        }
-    
-    result = data.get("result", False)
-    ttps = data.get("ttps", [])
-    
-    logger.info(f"[Claude Code] JSON 解析成功，result: {result}，ttps 数量: {len(ttps)}")
-    
-    return {
-        "result": result,
-        "ttps": ttps,
-        # result为true就表示分析成功，即使ttps为空（表示没有发现技术，这也是合理的结果）
-        "status": "success" if result else "failed"
-    }
+    # 使用号池调用
+    return await _call_with_key_pool(_call_with_key)

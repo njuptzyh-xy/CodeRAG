@@ -32,7 +32,7 @@ class ProjectAnalyzer:
                  max_file_size: int = 1024 * 1024,  # 1MB
                  max_chunk_chars: int = 3000,
                  min_chunk_lines: int = 5,
-                 max_workers: int = 1,
+                 max_workers: int = 20,
                  max_code_files: int = 100,  # 最大代码文件数量限制
                  max_code_length: int = 25000,  # 单个文件最大代码长度
                  max_file_analysis_workers: int = 30,  # 文件分析并发数

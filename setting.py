@@ -82,3 +82,16 @@ MILVUS_SECURE = os.getenv("MILVUS_SECURE", "false").lower() == "true"
 MILVUS_FULLTEXT_INDEX_FILED = os.getenv("MILVUS_FULLTEXT_INDEX_FILED", "code_data")
 MILVUS_CODE_INDEX_FILED = os.getenv("MILVUS_CODE_INDEX_FILED", "code_data")
 MILVUS_VECTOR_FILED = os.getenv("MILVUS_VECTOR_FILED", "code__embedding")
+
+# ====== Claude Code API Keys 配置 ==================
+# Claude API Keys (号池)，多个 key 用逗号分隔
+CLAUDE_API_KEYS_STR = os.getenv('CLAUDE_API_KEYS', '')
+if CLAUDE_API_KEYS_STR:
+    CLAUDE_API_KEYS = [k.strip() for k in CLAUDE_API_KEYS_STR.split(',') if k.strip()]
+else:
+    # 默认 keys
+    CLAUDE_API_KEYS = [
+        "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
+        "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
+        "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
+    ]
