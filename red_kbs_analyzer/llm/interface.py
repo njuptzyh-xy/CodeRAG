@@ -125,9 +125,15 @@ class LLMInterface:
         self.logger = logger
         self.prompt_templates = PromptTemplates()
         
+        # 保存 max_tokens 配置
+        self.primary_config = config.get("primary", {})
+        self.fallback_config = config.get("fallback", {})
+        self.primary_max_tokens = self.primary_config.get("max_tokens", 6000)
+        self.fallback_max_tokens = self.fallback_config.get("max_tokens", 6000)
+        
         # 初始化客户端
-        self.primary_client = self._create_client(config.get("primary", {}))
-        self.fallback_client = self._create_client(config.get("fallback", {}))
+        self.primary_client = self._create_client(self.primary_config)
+        self.fallback_client = self._create_client(self.fallback_config)
         
         if not self.primary_client and not self.fallback_client:
             self.logger.warning("未配置有效的LLM客户端，使用模拟客户端")
@@ -184,15 +190,48 @@ class LLMInterface:
             
             # 尝试主要客户端
             response_content = self._call_with_fallback(messages)
+            # print(f"提取的响应内容:{response_content}")
             
             if response_content:
                 # 提取JSON内容
                 result = extract_json_content(response_content)
+                # print(f"提取的json内容:{result}")
                 if result:
                     result["status"] = "success"
                     return result
                 else:
                     self.logger.error("无法从响应中提取JSON内容")
+                    # 添加详细调试信息
+                    self.logger.error(f"任务类型: {task}")
+                    self.logger.error(f"响应内容长度: {len(response_content) if response_content else 0}")
+                    if response_content:
+                        # 记录前1000字符和后500字符
+                        preview = response_content[:1000] if len(response_content) > 1000 else response_content
+                        self.logger.error(f"响应内容预览（前1000字符）:\n{preview}")
+                        if len(response_content) > 1000:
+                            suffix = response_content[-500:] if len(response_content) > 500 else ""
+                            self.logger.error(f"响应内容后缀（后500字符）:\n{suffix}")
+                        # 检查JSON结构
+                        has_open_brace = '{' in response_content
+                        has_close_brace = '}' in response_content
+                        open_count = response_content.count('{')
+                        close_count = response_content.count('}')
+                        self.logger.error(f"JSON结构检查: 包含{{: {has_open_brace}, 包含}}: {has_close_brace}, {{数量: {open_count}, }}数量: {close_count}")
+                        # 检查是否被截断
+                        if has_open_brace and not has_close_brace:
+                            self.logger.error("响应可能被截断：有 { 但没有 }")
+                        elif open_count != close_count:
+                            self.logger.error(f"括号不匹配：{{ 数量={open_count}, }} 数量={close_count}，可能被截断或格式错误")
+                        # 检查是否包含错误信息
+                        error_keywords = ['error', 'Error', 'ERROR', 'timeout', 'Timeout', 'rate limit', 'Rate limit', 'failed', 'Failed']
+                        has_error = any(keyword in response_content for keyword in error_keywords)
+                        if has_error:
+                            self.logger.error("响应可能包含错误信息")
+                        # 检查是否包含JSON代码块标记
+                        has_json_marker = '```json' in response_content or '``` json' in response_content
+                        self.logger.error(f"包含JSON代码块标记: {has_json_marker}")
+                    else:
+                        self.logger.error("响应内容为空或None")
             
             return None
             
@@ -234,14 +273,20 @@ class LLMInterface:
         # 尝试主要客户端
         if self.primary_client:
             try:
-                return self.primary_client.chat_completion(messages)
+                return self.primary_client.chat_completion(
+                    messages,
+                    max_tokens=self.primary_max_tokens
+                )
             except Exception as e:
                 self.logger.warning(f"主要LLM客户端调用失败，尝试备用客户端: {e}")
         
         # 尝试备用客户端
         if self.fallback_client:
             try:
-                return self.fallback_client.chat_completion(messages)
+                return self.fallback_client.chat_completion(
+                    messages,
+                    max_tokens=self.fallback_max_tokens
+                )
             except Exception as e:
                 self.logger.error(f"备用LLM客户端调用失败: {e}")
         

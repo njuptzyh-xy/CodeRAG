@@ -265,7 +265,7 @@ class ESHelper:
         )
         hits = self._execute_hybrid([request], [1.0], setting.ES_VECTOR_SIZE)
         return self._format_hits(hits)
-
+    # 暂时对这个混合检索策略弃用
     def hybrid_search(self, text_query: str, vector: List[float]) -> List[Dict[str, Any]]:
         """
         混合检索：分别执行全文和向量检索，再按 ES_ALPHA 进行线性融合。

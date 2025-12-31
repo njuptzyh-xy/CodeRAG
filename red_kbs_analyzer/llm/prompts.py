@@ -12,27 +12,6 @@ class PromptTemplates:
     def __init__(self):
         """初始化模板"""
         # 项目摘要提示词模板
-        self.CLOUDE_SUMMARY_PROMPT = """
-This is the ReadMe.md documentation for this project
-{readme_content}
-
-This is the file directory tree for this project
-  {file_tree}
-
-  You'll need to analyze the project from the perspective of the RED team and the Mitre-ATTCK attack framework, and deduce the most likely tactics involved in the software, as well as how the data flows.
-  The results of the analysis should not exceed 300 words.
-
-  You also need to provide a list of typical files(max 5 files), which can represent the main tactical activities of this software.
-
-  Here is the format of the your output:
-  ```json
-  {{
-      "summary": max 300 words to describe the project,
-    "files": [File 1, File 2, File 3]  # 输出文件相对于项目的路径
-}}
-```
-Note: You only need to return json, you don't need to output anything else
-"""
         self.SUMMARY_PROMPT = """
 This is the ReadMe.md documentation for this project
 {readme_content}
@@ -48,7 +27,7 @@ This is the file directory tree for this project
   Here is the format of the your output:
   ```json
   {{
-      "summary": max 300 words to describe the project,
+      "summary": "不超过300字的中文项目摘要",
     "files": [File 1, File 2, File 3]  # 输出文件相对于项目的路径
 }}
 ```
@@ -100,46 +79,69 @@ Note: You only need to return json, you don't need to output anything else
 
         # 文件技术分析提示词模板  
         self.TECHNIQUE_PROMPT = """
-I'll give you all the slices {code_chunks} of a file with the following data structure:
+我会给你一个文件的所有代码切片 {code_chunks}，每个切片的数据结构如下：
 {{
   "chunk_number": 1,
   "code": "class MyClass:\\n    def __init__(self):\\n        pass"
 }}
-Please analyze the mitre-attck technique corresponding to the file and give the results in blocks. 
-This file is the file {file_path} of the project {software_name}
-And the tactical phase to which this project belongs has been analyzed and is {software_tactics}
-You have to make sure that each technique gives something in the code that can be corroborated, otherwise don't give a technique. That is, output the technology with what you think is a confidence relevance > 0.9, which is more than 90% match.
 
-You have to think about technology from a holistic perspective versus a RED team's perspective. Don't output if it's too simple.
+请你基于这些代码片段，分析该文件所对应的 MITRE ATT&CK 技术（technique），并按块给出结果。
+这个文件的路径是 {file_path}，所属项目名称是 {software_name}。
+该项目所属的战术阶段已经分析为：{software_tactics}。
 
-Here is the format of the your output:
-```json
+你必须确保：只有当某个技术在代码中有可以佐证的内容时，才输出该技术。
+也就是说，只输出你认为"与代码匹配度大于 0.9（90%）"的技术。
+
+你需要从红队的视角、从整体技术能力的角度来思考技术，不要对过于简单或常规的代码输出技术。
+
+【JSON 严格要求（非常重要，必须遵守）】：
+1. 你 **必须** 输出严格合法的 JSON，能够被 Python 的 `json.loads` 直接解析。
+2. 你的输出只能是一个 JSON 对象，放在一个 代码块中；在代码块前后 **禁止** 输出任何其它文字、说明或 Markdown。
+3. JSON 中所有字符串必须用英文双引号 "..." 包裹，字符串内部 **不能** 出现未转义的英文双引号。
+   - 如果需要表示引号，请优先使用中文引号（例如：开发能力、"开发能力"）。
+   - 如果必须使用英文双引号，必须写成 \\\"这样的形式，例如：\\"开发能力\\"。
+4. JSON 中 **禁止** 出现注释，禁止多余的逗号（例如数组或对象最后一个元素后不能有逗号）。
+5. "ttps" 数组中的每一个对象，都 **必须同时包含** 以下所有字段，字段名不能缺失：
+   - "technique_id"
+   - "name"
+   - "code_relevance"
+   - "chunk_number"
+   - "relevance"
+   - "have_code"
+
+下面是你输出的 **精确 JSON 结构示例**（注意：示例中注释只为说明，实际输出时不能包含注释和多余字段，只保留字段名和字段值）：
+
 {{
     "result": true,
     "ttps": [
         {{
-      "technique_id": "", # 技术id/子技术id
-      "name": "", # 技术名称/子技术名称 #中英文
-      "code_relevance": "", # 代码中可以佐证的地方（必须用中文描述）
-      "chunk_number": 1, # 代码块编号 
-      "relevance": 1.0, # 相关性得分，0-1之间，1表示完全相关，0表示完全不相关，只有当技术与代码相关时，才给出相关性得分 
-      "have_code": true, # 是否在代码中实现
-    }},
-    {{
-      "technique_id": "", # 技术id
-      "name": "", # 技术名称
-      "code_relevance": "", # 代码中可以佐证的地方（必须用中文描述）
-      "chunk_number": -1, # 代码块编号, 如果代码块编号为-1，则表示该技术没有在代码中实现
-      "relevance": 0.9,  # 
-      "have_code": false
-    }},
-    }}
+            "technique_id": "",
+            "name": "",
+            "code_relevance": "",
+            "chunk_number": 1,
+            "relevance": 1.0, # 相关性得分，0-1之间，1表示完全相关，0表示完全不相关，只有当技术与代码相关时，才给出相关性得分 
+            "have_code": true # 是否在代码中实现
+        }},
+        {{
+            "technique_id": "",
+            "name": "",
+            "code_relevance": "",
+            "chunk_number": -1,
+            "relevance": 0.9,
+            "have_code": false
+        }}
     ]
-}}
-```
+}}IMPORTANT RULES（重要规则）：
+1. "ttps" 数组中的每个对象，必须同时包含字段："technique_id"、"name"、"code_relevance"、"chunk_number"、"relevance"、"have_code"。
+2. 每个字段名都必须出现，不能省略，不能用其它名字替代。
+3. 整个 JSON 必须是严格合法、可解析的 JSON（不允许未转义的双引号、不允许多余逗号、不允许注释）。
+4. 不要在 JSON 代码块外输出任何其他内容（包括解释、自然语言、Markdown 等）。
+5. 如果你对自己生成的 JSON 是否合法有任何怀疑，必须在回复前自行修正，直到成为严格合法的 JSON。
+
 {mitre_techniques}
 
-Note: You only need to return json, you don't need to output anything else
+注意：你只需要返回 JSON 结果，不要输出任何其他内容。
+本提示严格要求你只能按照上述 JSON 格式输出。
 """
 
         # MITRE ATT&CK 技术列表

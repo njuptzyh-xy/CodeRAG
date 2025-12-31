@@ -21,11 +21,19 @@ from pymilvus import (
 )
 from pymilvus.exceptions import MilvusException
 from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, DOWNLOAD_FILE_CHUNK_URL, EMBEDDING_URL, 
-                     OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI, EMBEDDING_API_KEY,
+                     OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI, NEO4J_DATABASE, EMBEDDING_API_KEY,
                      MILVUS_HOST, MILVUS_PORT, MILVUS_USER, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION, MILVUS_CONSISTENCY_LEVEL, MILVUS_SECURE)
 from utils.map_prompt import ANALYZE_FILE_TECHNIQUE_PROMPT
 
+# 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
+# 原代码（等磁盘空间足够后改回）：
+# UPLOAD_FILE_DIR = 'upload_file'  # 相对于项目根目录
+# 临时路径
+UPLOAD_FILE_DIR = '/root/workspace/ch/upload_file'
+
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+
+SESSION_KWARGS = {"database": NEO4J_DATABASE}
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
@@ -94,7 +102,7 @@ def download_file_data(task_id, file_name):
         response_data = response.json()
         if response_data["status"] == "SUCCESS":
             new_file_name = "{}.json".format(file_name)
-            result_file_path = os.path.join("upload_file", new_file_name)
+            result_file_path = os.path.join(UPLOAD_FILE_DIR, new_file_name)
             if not os.path.exists(result_file_path):
                 with open(result_file_path, "w", encoding="utf-8") as f:
                     json.dump(response_data, f, ensure_ascii=False, indent=2)
@@ -223,7 +231,7 @@ def get_all_documents_text(path, file_name):
         file_text += content
     # 写入文件路径
     new_file_name = "{}.txt".format(file_name)
-    save_path = os.path.join("upload_file", new_file_name)
+    save_path = os.path.join(UPLOAD_FILE_DIR, new_file_name)
     with open(save_path, "w", encoding="utf-8") as f:
         f.write(file_text)
     
@@ -336,7 +344,7 @@ def map_document_to_technical(path):
         return {"data": str(e), "status": "error"}
 
 def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text, document_insert_number=0):
-    document_path = os.path.join("upload_file", file_name_txt)
+    document_path = os.path.join(UPLOAD_FILE_DIR, file_name_txt)
     with open(document_path, "r", encoding="utf-8") as f:
         # 文章正文
         document_full_text = f.read()
@@ -349,7 +357,7 @@ def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chu
     document_insert_type = "user_upload_article"
                         
     document_source_info = "userUpload-{}".format(source_name)
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         # 插入节点
         cypher = """
             MERGE (n:BaseEntity:MitreAttackArticleDocument {title: $source_name})
@@ -399,7 +407,7 @@ def get_embhedding(chunk_description):
         return None
 
 def insert_neo4j_chunk(chunk_json_file_name, source_name):
-    chunk_file_path = os.path.join("upload_file", chunk_json_file_name)
+    chunk_file_path = os.path.join(UPLOAD_FILE_DIR, chunk_json_file_name)
     with open(chunk_file_path, "r", encoding="utf-8") as f:
         # 文章 chunk 数据
         total_chunk_data_json = json.load(f)
@@ -421,7 +429,7 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
         chunk_insert_type = "user_upload_article_chunk"
             
         chunk_source_info = "userUpload-{}".format(source_name)
-        with driver.session() as session:
+        with driver.session(**SESSION_KWARGS) as session:
             # 插入节点
             insert_document_chunk_query = """
                 MERGE (n:BaseEntity:MitreAttackArticleChunk {chunk_id: $chunk_id})
@@ -451,7 +459,7 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
             
 def add_document_chunk_rel(source_name):
     source_info = "userUpload-{}".format(source_name)
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         # 查询所有 insert_number=5 且为 MitreAttackArticleChunk 的节点及其 source_info
         cypher = """
         MATCH (c:MitreAttackArticleChunk)
@@ -478,7 +486,7 @@ def add_document_chunk_rel(source_name):
 def add_document_tec_rel(source_name):
     source_info = "userUpload-{}".format(source_name)
 
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         cypher = """
         MATCH (d:MitreAttackArticleDocument)
         WHERE d.insert_number = 0 AND d.source_info = $source_info
@@ -714,7 +722,7 @@ def add_milvus(all_embedding_element_id):
     """
     
     try:
-        with driver.session() as session:
+        with driver.session(**SESSION_KWARGS) as session:
             result = session.run(query, element_ids=all_embedding_element_id)
             all_records = list(result)
     except Exception as e:
@@ -855,7 +863,7 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
         return {"status": "error", "message": error_info}
     
     # 处理文件中的图片，有和安全有关的替换成文字
-    chunk_json_file_path = os.path.join("upload_file", chunk_json_file_name)
+    chunk_json_file_path = os.path.join(UPLOAD_FILE_DIR, chunk_json_file_name)
     status = handle_picture_in_json_file(chunk_json_file_path)
     if status["status"] == "success":
         print(f"{file_name} 文字替换完成")
@@ -904,7 +912,15 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     
     
 def save_file(file):
-    upload_file_dir = 'upload_file'  # 相对于项目根目录
+    # 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
+    # 原代码（等磁盘空间足够后改回）：
+    # upload_file_dir = 'upload_file'  # 相对于项目根目录
+    # # 确保目录存在
+    # if not os.path.exists(upload_file_dir):
+    #     os.makedirs(upload_file_dir)
+    
+    # 临时路径
+    upload_file_dir = UPLOAD_FILE_DIR
     # 确保目录存在
     if not os.path.exists(upload_file_dir):
         os.makedirs(upload_file_dir)

@@ -4,6 +4,7 @@ import os
 NEO4J_URI = os.getenv('NEO4J_URI', "bolt://10.7.7.200:7687")
 NEO4J_USER = os.getenv('NEO4J_USER', "neo4j")
 NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', "D6gkdYMp3NrDzh")
+NEO4J_DATABASE = os.getenv('NEO4J_DATABASE', "neo4j")  # 数据库名称，默认使用已有的 test 库
 INDEX_NAME = os.getenv('INDEX_NAME', "mitre_acttack_index")
 
 # Embedding 模型设置
@@ -15,15 +16,21 @@ EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "huaqing-embedding-key-9b677e
 # Chat 模型设置
 CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
 CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-896ca4dae917485184a075dfb363759c")
+CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-6584e56ad0ac47e58a222b1cc6b01627")
 CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
 CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
+
+# OpenAI 模型设置
+OPENAI_URL = os.getenv('OPENAI_URL', "http://10.1.1.125:29000/v1")
+OPENAI_MODEL_NAME = os.getenv('OPENAI_MODEL_NAME', "qwen3-coder")
+OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', "0"))
+OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', "25000"))
 
 # rerank 模型设置
 RERANK_URL = os.getenv('RERANK_URL', "http://10.7.7.200:8223/rerank")
 # 上传文件切块请求 url
-UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8004/submit-parse-job-from-file")
-DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8004/task-status/")
+UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8010/submit-parse-job-from-file")
+DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8010/task-status/")
 # 图片识别 url
 OCR_URL = os.getenv('OCR_URL', "http://10.7.7.200/ocr-image")
 

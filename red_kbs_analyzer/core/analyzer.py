@@ -18,6 +18,7 @@ from .ast_splitter import ASTCodeSplitter
 from .claude_code import (
     generate_project_summary_with_claude,
     identify_main_files_with_claude,
+    analyze_file_technique_with_claude,
 )
 from ..llm.interface import LLMInterface
 from ..llm.utils import format_code_chunks_for_llm
@@ -31,7 +32,7 @@ class ProjectAnalyzer:
                  max_file_size: int = 1024 * 1024,  # 1MB
                  max_chunk_chars: int = 3000,
                  min_chunk_lines: int = 5,
-                 max_workers: int = 30,
+                 max_workers: int = 1,
                  max_code_files: int = 100,  # 最大代码文件数量限制
                  max_code_length: int = 25000,  # 单个文件最大代码长度
                  max_file_analysis_workers: int = 30,  # 文件分析并发数
@@ -108,9 +109,10 @@ class ProjectAnalyzer:
         
         # 过滤代码文件
         code_files_only = [f for f in code_files if f.file_type == "code"]
-        if len(code_files_only) > self.max_code_files:
-            logger.info(f"项目 {project_name} 代码文件数量超过{self.max_code_files},跳过")
-            return self._create_empty_result(project_name, project_path)
+        # 移除文件数量限制，允许处理所有文件
+        # 如果文件数量较多，记录警告信息但继续处理
+        # if len(code_files_only) > self.max_code_files:
+        #     logger.warning(f"项目 {project_name} 代码文件数量({len(code_files_only)})超过建议值({self.max_code_files})，将继续处理（可能耗时较长）")
         
         # 4. 处理文件和分割代码
         logger.info("处理文件并分割代码块...")
@@ -229,29 +231,44 @@ class ProjectAnalyzer:
                 generate_project_summary_with_claude(project, processed_files)
             )
             logger.info(f"project_name: {project.project_name}")
-            logger.info(f"file_tree: {project.file_tree}")
-            logger.info(f"summary: {summary_result.get('summary')}")
-            logger.info(f"main_files: {summary_result.get('files')}")
+            logger.info(f"summary: {summary_result.get('summary') if summary_result else ''}")
+            logger.info(f"main_files: {summary_result.get('files') if summary_result else ''}")
 
-            if summary_result and "summary" in summary_result:
-                if "files" in summary_result and summary_result.get("files"):
-                    project.main_files = summary_result["files"]
-                return summary_result["summary"]
+            summary = (summary_result or {}).get("summary") or ""
+            files = (summary_result or {}).get("files") or []
+
+            # 情况 1：有 summary 且有重要文件 -> 直接使用
+            if summary and files:
+                project.main_files = files
+                return summary
+
+            # 情况 2：有 summary 但没有 important_files -> 用规则识别主要文件
+            if summary and not files:
+                logger.warning("Claude 返回了摘要但没有重要文件，使用规则识别主要文件")
+                # 直接使用文件名模式匹配，避免再次调用 Claude Code（可能同样被拒绝）
+                main_files = self._identify_main_files_by_pattern(processed_files)
+                project.main_files = main_files
+                return summary
+
+            # 情况 3：summary 也为空 -> 视为失败，走后面的 LLM / 规则兜底
+            logger.warning("Claude 未返回有效摘要，尝试使用 LLM 接口或规则兜底")
         except Exception as e:
             logger.error(f"Claude Code 生成摘要失败: {e}，尝试使用 LLM 接口")
         
         # 备用：调用LLM接口（保持原有兼容）
         if self.llm_interface:
-            logger.info("llm生成摘要")
             summary_result = self._call_llm_for_summary(project, processed_files)
             if summary_result and "summary" in summary_result:
+                summary_text = summary_result.get("summary", "")
+                logger.info(f"llm生成摘要内容: {summary_text}")
                 if "files" in summary_result:
                     project.main_files = summary_result["files"]
-                return summary_result["summary"]
+                return summary_text
         
         # 备用方案：生成简单摘要
         logger.info("备用方案生成摘要")
-        main_files = self._identify_main_files(processed_files, project)
+        # 直接使用文件名模式匹配，避免再次调用 Claude Code
+        main_files = self._identify_main_files_by_pattern(processed_files)
         summary_parts = []
         
         if project.readme_content:
@@ -302,6 +319,18 @@ class ProjectAnalyzer:
                 logger.error(f"Claude Code 识别主要文件失败: {e}，使用备用方案")
         
         # 备用方案：基于文件名模式匹配
+        return self._identify_main_files_by_pattern(processed_files)
+    
+    def _identify_main_files_by_pattern(self, processed_files: List[Dict[str, Any]]) -> List[str]:
+        """
+        基于文件名模式匹配识别主要文件
+        
+        Args:
+            processed_files: 处理后的文件列表
+            
+        Returns:
+            主要文件名列表
+        """
         main_patterns = [
             "main", "index", "app", "server", "client", "core", 
             "init", "setup", "config", "start", "run"
@@ -393,31 +422,87 @@ class ProjectAnalyzer:
         file_name = file_dict.get("file_name", "")
         file_abs_path = file_dict.get("file_abs_path", "")
         
-        # 过滤代码块并限制长度（参考main_flow_llm.py的逻辑）
-        filtered_chunks = []
-        len_code = 0
+        # 将代码块分成多个批次（每批不超过max_code_length）
+        batch_chunks_list = []
+        current_batch = []
+        current_length = 0
         
         for chunk in chunks:
             chunk_code = chunk.get("code", "")
-            len_code += len(chunk_code)
-            if len_code > self.max_code_length:
-                break
-            filtered_chunks.append({
+            chunk_length = len(chunk_code)
+            
+            # 如果当前批次加上这个chunk会超过限制，且当前批次不为空，则保存当前批次
+            if current_length + chunk_length > self.max_code_length and current_batch:
+                batch_chunks_list.append(current_batch)
+                current_batch = []
+                current_length = 0
+            
+            # 如果单个chunk就超过限制，仍然添加（避免完全跳过）
+            current_batch.append({
                 "code": chunk_code,
                 "chunk_number": chunk.get("chunk_number", 0)
             })
+            current_length += chunk_length
         
-        if not filtered_chunks:
+        # 添加最后一个批次
+        if current_batch:
+            batch_chunks_list.append(current_batch)
+        
+        if not batch_chunks_list:
             return None
         
-        # 调用LLM分析文件技术
-        technique_result = self._call_llm_for_file_techniques_filtered(
-            filtered_chunks, file_dict, project, tactics_analysis
-        )
+        # 记录分批信息
+        total_code_length = sum(len(c.get("code", "")) for batch in batch_chunks_list for c in batch)
+        if len(batch_chunks_list) > 1:
+            logger.info(f"[文件技术分析] 文件 {file_name} 代码过长({total_code_length} 字符)，分成 {len(batch_chunks_list)} 批进行分析")
         
-        # 如果LLM分析成功，补充原始chunk信息
-        if technique_result and technique_result.get("status") == "success":
-            for ttp in technique_result.get("ttps", []):
+        # 对每个批次进行分析
+        all_ttps = []
+        all_success = False
+        
+        for batch_idx, batch_chunks in enumerate(batch_chunks_list):
+            batch_code_length = sum(len(c.get("code", "")) for c in batch_chunks)
+            logger.info(f"[文件技术分析] 分析第 {batch_idx + 1}/{len(batch_chunks_list)} 批，包含 {len(batch_chunks)} 个代码块，总长度 {batch_code_length} 字符")
+            
+            technique_result = self._call_llm_for_file_techniques_filtered(
+                batch_chunks, file_dict, project, tactics_analysis
+            )
+            
+            if technique_result and technique_result.get("status") == "success":
+                all_success = True
+                batch_ttps = technique_result.get("ttps", [])
+                
+                # 过滤：只保留 have_code == true 且 relevance >= 0.9 的结果
+                filtered_ttps = [
+                    ttp for ttp in batch_ttps
+                    if ttp.get("have_code", False) == True
+                    and ttp.get("relevance") is not None
+                    and ttp.get("relevance", 0) >= 0.9
+                ]
+                
+                if len(batch_ttps) != len(filtered_ttps):
+                    logger.info(
+                        f"[文件技术分析] 第 {batch_idx + 1} 批分析完成，"
+                        f"发现 {len(batch_ttps)} 个技术，"
+                        f"过滤后保留 {len(filtered_ttps)} 个高相关性技术（have_code=true, relevance>=0.9）"
+                    )
+                else:
+                    logger.info(f"[文件技术分析] 第 {batch_idx + 1} 批分析完成，发现 {len(filtered_ttps)} 个技术")
+                
+                all_ttps.extend(filtered_ttps)
+            else:
+                logger.warning(f"[文件技术分析] 第 {batch_idx + 1} 批分析失败")
+        
+        # 合并所有批次的结果
+        merged_result = {
+            "result": all_success,
+            "ttps": all_ttps,
+            "status": "success" if all_success else "failed"
+        }
+        
+        # 补充原始chunk信息
+        if merged_result.get("status") == "success":
+            for ttp in merged_result.get("ttps", []):
                 chunk_num = ttp.get("chunk_number", 0)
                 # 从原始chunks中找到对应编号的chunk
                 for chunk in chunks:
@@ -431,11 +516,7 @@ class ProjectAnalyzer:
             "file_name": file_name,
             "file_abs_path": file_abs_path,
             "chunks": chunks,  # 包含所有原始代码块，用于全量入库
-            "file_technique": technique_result or {
-                "result": False,
-                "ttps": [],
-                "status": "failed"
-            }
+            "file_technique": merged_result
         }
     
     def _analyze_file_techniques(self, 
@@ -542,6 +623,39 @@ class ProjectAnalyzer:
             if not filtered_chunks:
                 return None
             
+            # 优先使用 Claude Code 分析
+            try:
+                from ..llm.prompts import PromptTemplates
+                
+                logger.info(f"[文件技术分析] 使用 Claude Code 分析文件: {file_dict.get('file_abs_path', '')}")
+                
+                # 使用相同的 prompt 模板
+                prompt_templates = PromptTemplates()
+                prompt = prompt_templates.get_technique_prompt(
+                    code_chunks=filtered_chunks,
+                    software_name=project.project_name,
+                    software_tactics=tactics_analysis,
+                    file_path=file_dict.get("file_abs_path", "")
+                )
+                
+                # 调用 Claude Code
+                result = asyncio.run(
+                    analyze_file_technique_with_claude(
+                        prompt=prompt,
+                        file_path=file_dict.get("file_abs_path", ""),
+                        project=project
+                    )
+                )
+                
+                if result and result.get("status") == "success":
+                    logger.info(f"[文件技术分析] Claude Code 分析成功")
+                    return result
+                else:
+                    logger.warning(f"[文件技术分析] Claude Code 分析失败，回退到 LLM 分析")
+            except Exception as e:
+                logger.warning(f"[文件技术分析] Claude Code 分析异常: {e}，回退到 LLM 分析")
+            
+            # 备用方案：使用原有的 LLM 接口
             metadata = {
                 "code_chunks": filtered_chunks,
                 "software_name": project.project_name,
@@ -559,34 +673,112 @@ class ProjectAnalyzer:
     def _get_main_files_content(self, project: RedTool, processed_files: List[Dict[str, Any]]) -> str:
         """获取主要文件的代码内容"""
         logger.info("获取主要文件。。。")
-        main_files = project.main_files or self._identify_main_files(processed_files, project)
+        main_files_raw = project.main_files or self._identify_main_files(processed_files, project)
+        
+        logger.info(f"获取主要文件 raw 列表: {main_files_raw}")
+        
+        # 统一转换为绝对路径集合，避免重名问题
+        main_files_set = set()
+        matched_count = 0
+        for item in main_files_raw:
+            # 1. 如果是绝对路径，直接使用绝对路径
+            if os.path.isabs(item):
+                abs_item = os.path.abspath(item)
+                main_files_set.add(abs_item)
+                matched_count += 1
+                logger.debug(f"主要文件匹配（绝对路径）: {item} -> {abs_item}")
+                continue
+
+            # 2. 非绝对路径（可能是相对路径或纯文件名），在 processed_files 中查找对应文件
+            item_normalized = item.replace('\\', '/').lstrip('./')
+            found = False
+
+            for file_dict in processed_files:
+                file_name = file_dict.get("file_name")
+                file_path = file_dict.get("file_path", "")
+                file_abs_path = file_dict.get("file_abs_path")
+
+                if not file_abs_path:
+                    continue
+
+                file_path_normalized = file_path.replace('\\', '/').lstrip('./') if file_path else ""
+
+                # 2.1 相对路径或后缀匹配（例如 file_path='proj/auth/login.php', item='auth/login.php'）
+                if (
+                    file_path_normalized == item_normalized
+                    or file_path_normalized.endswith("/" + item_normalized)
+                ):
+                    main_files_set.add(file_abs_path)
+                    matched_count += 1
+                    found = True
+                    logger.debug(
+                        f"主要文件匹配（相对路径/后缀）: {item} -> {file_abs_path} (file_path={file_path_normalized})"
+                    )
+                    break
+
+                # 2.2 仅文件名匹配（如 'user_edit.php'）
+                if file_name == item:
+                    main_files_set.add(file_abs_path)
+                    matched_count += 1
+                    found = True
+                    logger.debug(f"主要文件匹配（文件名）: {item} -> {file_abs_path}")
+                    break  # 找到第一个匹配的就停止（如果有重名，只取第一个）
+
+            if not found:
+                logger.warning(f"主要文件未匹配到绝对路径: {item} (在 {len(processed_files)} 个文件中查找)")
+
+        logger.info(f"主要文件匹配结果: 输入 {len(main_files_raw)} 个，成功匹配 {matched_count} 个，绝对路径集合 {len(main_files_set)} 个")
+        logger.info(f"主要文件列表（绝对路径，共{len(main_files_set)}个）: {list(main_files_set)[:5]}...")  # 只显示前5个
         
         all_content = ""
         content_length = 0
-        max_content_length = 50000  # 限制总内容长度
+        max_file_length = 20000  # 每个文件最大字符数
+        max_total_length = 80000  # 总内容最大字符数（可以包含多个文件）
         
         for file_dict in processed_files:
+            file_abs_path = file_dict.get("file_abs_path", "")
             file_name = file_dict.get("file_name", "")
             
-            # 检查是否为主要文件
-            if file_name in main_files:
+            # 使用绝对路径匹配，避免重名问题
+            if file_abs_path in main_files_set:
+                # 检查总长度是否超过限制
+                if content_length >= max_total_length:
+                    logger.warning(f"总内容长度已达到限制({max_total_length})，停止添加更多文件")
+                    break
+                
                 # 读取文件内容
-                file_path = file_dict.get("file_abs_path", "")
-                if file_path:
+                if file_abs_path:
                     try:
-                        content = self.file_processor.read_file_content(file_path)
-                        if content and content_length + len(content) <= max_content_length:
-                            all_content += f"\n=== {file_name} ===\n{content}\n"
-                            content_length += len(content)
-                        elif content:
-                            # 截断内容
-                            remaining_length = max_content_length - content_length
-                            if remaining_length > 500:  # 至少保留500字符
-                                all_content += f"\n=== {file_name} ===\n{content[:remaining_length]}...\n"
+                        content = self.file_processor.read_file_content(file_abs_path)
+                        if not content:
+                            logger.warning(f"文件 {file_name} 内容为空，跳过")
+                            continue
+                        
+                        # 截断单个文件内容到最大长度
+                        original_length = len(content)
+                        if len(content) > max_file_length:
+                            content = content[:max_file_length] + "\n... (文件内容已截断)"
+                            logger.info(f"文件 {file_name} 内容过长({original_length}字符)，已截断到{max_file_length}字符")
+                        
+                        # 检查添加后是否会超过总长度限制
+                        file_content_with_header = f"\n=== {file_name} ===\n{content}\n"
+                        if content_length + len(file_content_with_header) > max_total_length:
+                            # 如果会超过，只添加剩余空间的部分
+                            remaining = max_total_length - content_length - len(f"\n=== {file_name} ===\n")
+                            if remaining > 500:  # 至少保留500字符
+                                all_content += f"\n=== {file_name} ===\n{content[:remaining]}...\n"
+                                logger.warning(f"总长度限制，文件 {file_name} 只添加了部分内容")
                             break
+                        else:
+                            all_content += file_content_with_header
+                            content_length += len(file_content_with_header)
+                            logger.debug(f"已添加文件 {file_name}，当前总长度: {content_length}")
+                            
                     except Exception as e:
-                        logger.error(f"读取文件内容失败 {file_path}: {e}")
+                        logger.error(f"读取文件内容失败 {file_abs_path}: {e}")
         
+        file_count = all_content.count("===") // 2 if all_content else 0
+        logger.info(f"主要文件内容获取完成，总长度: {content_length}字符，包含文件数: {file_count}")
         return all_content if all_content else project.file_tree
     
     def set_llm_interface(self, llm_interface):

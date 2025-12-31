@@ -11,6 +11,7 @@ import requests
 from red_kbs_analyzer import RedKBSAnalyzer
 from neo4j import GraphDatabase
 from openai import OpenAI
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymilvus import (
     connections,
     Collection,
@@ -22,11 +23,18 @@ from pymilvus import (
     utility,
 )
 from pymilvus.exceptions import MilvusException
-from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_API_KEY,
-                     NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER,
+from setting import (CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, EMBEDDING_URL, EMBEDDING_API_KEY, OPENAI_URL, OPENAI_MODEL_NAME, OPENAI_TEMPERATURE, OPENAI_MAX_TOKENS,
+                     NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER, NEO4J_DATABASE,
                      MILVUS_HOST, MILVUS_PORT, MILVUS_USER, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION, MILVUS_CONSISTENCY_LEVEL, MILVUS_SECURE)
 
+# 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
+# 原代码（等磁盘空间足够后改回）：
+# UPLOAD_CODE_DIR = 'upload_code'  # 相对于项目根目录
+# 临时路径
+UPLOAD_CODE_DIR = '/root/workspace/ch/upload_code'
+
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+SESSION_KWARGS = {"database": NEO4J_DATABASE}
 driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
 # 连接 Milvus - 改进错误处理
@@ -58,28 +66,28 @@ def get_filename_without_extension(file_path):
     else:
         return pathlib.Path(file_name).stem
 
-def create_extract_dir(file_path, base_dir="upload_code"):
+def create_extract_dir(file_path, base_dir=UPLOAD_CODE_DIR):
     """根据压缩包文件名创建解压目录"""
     filename = get_filename_without_extension(file_path)
     extract_dir = os.path.join(base_dir, filename)
     os.makedirs(extract_dir, exist_ok=True)
     return extract_dir
 
-def extract_tar_file(file_path, base_dir="upload_code"):
+def extract_tar_file(file_path, base_dir=UPLOAD_CODE_DIR):
     """解压 .tar 或 .tar.gz 文件到指定文件夹"""
     extract_dir = create_extract_dir(file_path, base_dir)
     with tarfile.open(file_path, "r") as tar:
         tar.extractall(path=extract_dir, filter='data')
     return extract_dir
 
-def extract_zip_file(file_path, base_dir="upload_code"):
+def extract_zip_file(file_path, base_dir=UPLOAD_CODE_DIR):
     """解压 .zip 文件到指定文件夹"""
     extract_dir = create_extract_dir(file_path, base_dir)
     with zipfile.ZipFile(file_path, "r") as zip_ref:
         zip_ref.extractall(extract_dir)
     return extract_dir
 
-def extract_7z_file(file_path, base_dir="upload_code"):
+def extract_7z_file(file_path, base_dir=UPLOAD_CODE_DIR):
     """解压 .7z 文件到指定文件夹"""
     extract_dir = create_extract_dir(file_path, base_dir)
     with py7zr.SevenZipFile(file_path, mode='r') as z:
@@ -103,7 +111,15 @@ def split_filename_correctly(file_name):
     return name_part, ext_part
 
 def save_file_and_extract(file):
-    upload_code_dir = 'upload_code'  # 相对于项目根目录
+    # 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
+    # 原代码（等磁盘空间足够后改回）：
+    # upload_code_dir = 'upload_code'  # 相对于项目根目录
+    # # 确保目录存在
+    # if not os.path.exists(upload_code_dir):
+    #     os.makedirs(upload_code_dir)
+    
+    # 临时路径
+    upload_code_dir = UPLOAD_CODE_DIR
     # 确保目录存在
     if not os.path.exists(upload_code_dir):
         os.makedirs(upload_code_dir)
@@ -191,8 +207,8 @@ def generate_code_chunk_description(code_data, file_name=None):
 """
         
         client = OpenAI(
-            api_key=CHAT_MODEL_API_KEY,
-            base_url=CHAT_URL,
+            api_key="not-needed",
+            base_url=OPENAI_URL,
         )
         
         messages = [
@@ -201,7 +217,7 @@ def generate_code_chunk_description(code_data, file_name=None):
         ]
         
         response = client.chat.completions.create(
-            model=CHAT_MODEL_NAME,
+            model=OPENAI_MODEL_NAME,
             messages=messages,
             response_format={'type': 'json_object'},
             temperature=0,
@@ -250,7 +266,7 @@ def handle_json_file(data, insert_number):
     logger.info(f"[handle_json_file] 收到 {len(tactics_id_list2)} 个战术 ID: {tactics_id_list2}")
     
     # 插入 mitre_attack_code_software 节点
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         merge_query = """
         MERGE (software:BaseEntity:MitreAttackCodeSoftware {software_uuid: $software_uuid})
         ON CREATE SET
@@ -270,8 +286,10 @@ def handle_json_file(data, insert_number):
     # 拿取 code_files 需要的数据
     # 获取所有 file 的 uuid
     all_file_ids = []
-    # 获取所有 chunk element_id
+    # 获取所有 chunk element_id（仅 Neo4j 中的）
     all_chunk_element_id = []
+    # 新增：保存所有代码块信息（用于 Milvus），包括没有 technique_id 的
+    all_chunks_for_milvus = []
     
     software_files_data = data.get("software_files")
     if software_files_data:
@@ -282,7 +300,7 @@ def handle_json_file(data, insert_number):
             file_uuid = behind_file_uuid.format(behind_uuid, index)
             all_file_ids.append(file_uuid)
             logger.info(f"[handle_json_file] 处理文件[{index}] name={file_name} uuid={file_uuid}")
-            with driver.session() as session:
+            with driver.session(**SESSION_KWARGS) as session:
                 merge_file_query = """
                 MERGE (file:MitreAttackCodeSoftwareFile {file_uuid: $file_uuid})
                 ON CREATE SET
@@ -296,7 +314,7 @@ def handle_json_file(data, insert_number):
             logger.info(f"[handle_json_file] 文件节点 MERGE 完成 uuid={file_uuid}")
             index += 1
             
-            # 全量入库：处理文件的所有代码块
+            # 处理文件的所有代码块（用于筛选和 Milvus）
             all_chunks = single_file.get("chunks", [])
             code_data_total = single_file.get("file_technique")
             
@@ -314,7 +332,8 @@ def handle_json_file(data, insert_number):
                 logger.info(f"[handle_json_file] 文件[{file_name}] 没有代码块")
                 continue
             
-            # 遍历所有代码块，全量入库
+            # 第一步：准备所有代码块数据（用于后续筛选和 Milvus）
+            all_chunks_data = []
             code_index = 0
             for chunk in all_chunks:
                 chunk_number = chunk.get("chunk_number", code_index)
@@ -326,26 +345,7 @@ def handle_json_file(data, insert_number):
                     code_index += 1
                     continue
                 
-                # 为所有代码块生成description
-                description = generate_code_chunk_description(code_data, file_name)
-                
-                # 从 ttp_map 中获取与当前代码块关联的技术信息（保留技术关联信息）
-                # 注释掉原有的description获取逻辑，改为为所有代码块生成description
-                # # 从 ttp_map 中获取与当前代码块关联的技术信息
-                # ttp = ttp_map.get(chunk_number)
-                # if ttp:
-                #     # 使用 LLM 返回的代码相关性描述作为 description
-                #     description = ttp.get("code_relevance") or ttp.get("name")
-                #     technique_id = ttp.get("technique_id")
-                #     have_code = ttp.get("have_code", False)
-                #     relevance = ttp.get("relevance")
-                # else:
-                #     description = None
-                #     technique_id = None
-                #     have_code = False
-                #     relevance = None
-                
-                # 从 ttp_map 中获取技术关联信息（但不覆盖description）
+                # 从 ttp_map 中获取技术关联信息
                 ttp = ttp_map.get(chunk_number)
                 if ttp:
                     technique_id = ttp.get("technique_id")
@@ -360,49 +360,185 @@ def handle_json_file(data, insert_number):
                 chunk_end_line = chunk.get("end_line", 0)
                 code_uuid = "code-{}-{}-{}-{}".format(behind_uuid, index, chunk_number, code_index)
                 
-                logger.info(
-                    f"[handle_json_file] 代码块[{chunk_number}] 入库，technique={technique_id}, "
-                    f"行号={chunk_start_line}-{chunk_end_line}"
+                chunk_info = {
+                    "code_uuid": code_uuid,
+                    "code_data": code_data,
+                    "chunk_number": chunk_number,
+                    "chunk_start_line": chunk_start_line,
+                    "chunk_end_line": chunk_end_line,
+                    "technique_id": technique_id,
+                    "have_code": have_code,
+                    "relevance": relevance,
+                    "code_index": code_index,
+                    "file_uuid": file_uuid,
+                    "file_name": file_name,
+                    # 新增：所属软件名称，用于写入 Milvus 的 soft_name 字段
+                    "soft_name": software_name,
+                }
+                all_chunks_data.append(chunk_info)
+                code_index += 1
+            
+            if not all_chunks_data:
+                logger.info(f"[handle_json_file] 文件[{file_name}] 没有有效代码块需要处理")
+                continue
+            
+            # 第二步：区分有/无技术的代码块（用于日志统计）
+            # 只保留 have_code == true 且 relevance >= 0.9 的代码块用于生成 description
+            chunks_with_technique = [
+                c for c in all_chunks_data 
+                if c["technique_id"] is not None 
+                and c.get("have_code", False) == True 
+                and c.get("relevance") is not None 
+                and c.get("relevance", 0) >= 0.9
+            ]
+            chunks_without_technique = [c for c in all_chunks_data if c["technique_id"] is None]
+            chunks_with_low_relevance = [
+                c for c in all_chunks_data 
+                if c["technique_id"] is not None 
+                and (c.get("have_code", False) != True or c.get("relevance", 0) < 0.9)
+            ]
+            logger.info(
+                f"[handle_json_file] 文件[{file_name}] 有 {len(chunks_with_technique)} 个代码块满足条件（have_code=true, relevance>=0.9）将生成description，"
+                f"{len(chunks_with_low_relevance)} 个代码块关联技术但相关性不足，"
+                f"{len(chunks_without_technique)} 个代码块无技术，将全部插入 Neo4j"
+            )
+            
+            # 第三步：并发生成 description（仅对满足条件的代码块：have_code=true 且 relevance>=0.9）
+            if chunks_with_technique:
+                logger.info(f"[handle_json_file] 开始并发生成 {len(chunks_with_technique)} 个代码块的 description")
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    future_to_index = {
+                        executor.submit(generate_code_chunk_description, chunk_info["code_data"], file_name): i
+                        for i, chunk_info in enumerate(chunks_with_technique)
+                    }
+                    
+                    descriptions = [None] * len(chunks_with_technique)
+                    for future in as_completed(future_to_index):
+                        idx = future_to_index[future]
+                        try:
+                            descriptions[idx] = future.result()
+                        except Exception as e:
+                            logger.error(f"[handle_json_file] 代码块[{chunks_with_technique[idx]['chunk_number']}] 生成description失败: {e}")
+                            descriptions[idx] = None
+                    
+                    for i, desc in enumerate(descriptions):
+                        chunks_with_technique[i]["description"] = desc
+                
+                logger.info(f"[handle_json_file] description 生成完成")
+                
+                # 将已生成的 description 同步到 all_chunks_data 中对应的代码块
+                description_map = {c["code_uuid"]: c.get("description") for c in chunks_with_technique}
+                for chunk_info in all_chunks_data:
+                    code_uuid = chunk_info["code_uuid"]
+                    if code_uuid in description_map:
+                        chunk_info["description"] = description_map[code_uuid]
+                    else:
+                        # 没有技术的代码块，description 为 None（不生成描述）
+                        chunk_info["description"] = None
+            else:
+                # 没有任何关联技术的代码块，全都没有 description
+                for chunk_info in all_chunks_data:
+                    chunk_info["description"] = None
+            
+            # 第四步：为所有代码块生成 embedding（有/无技术都生成）
+            logger.info(f"[handle_json_file] 开始为 {len(all_chunks_data)} 个代码块生成 embedding")
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_index = {
+                    executor.submit(send_request_embedding, [chunk_info["code_uuid"], chunk_info["code_data"]]): i
+                    for i, chunk_info in enumerate(all_chunks_data)
+                }
+                
+                embeddings = [None] * len(all_chunks_data)
+                for future in as_completed(future_to_index):
+                    idx = future_to_index[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            texts_ids, embeddings_list = result
+                            if embeddings_list:
+                                embeddings[idx] = embeddings_list[0]
+                    except Exception as e:
+                        logger.error(f"[handle_json_file] 代码块[{all_chunks_data[idx]['chunk_number']}] 生成embedding失败: {e}")
+                        embeddings[idx] = None
+                
+                for i, emb in enumerate(embeddings):
+                    all_chunks_data[i]["code_embedding"] = emb
+            
+            logger.info(f"[handle_json_file] embedding 生成完成")
+            
+            # 第五步：批量插入 Neo4j（插入所有代码块，包含 embedding）
+            with driver.session(**SESSION_KWARGS) as session:
+                batch_merge_query = """
+                UNWIND $chunks AS chunk
+                MERGE (code:BaseEntity:MitreAttackCodeSoftwareCodeChunk {code_uuid: chunk.code_uuid})
+                ON CREATE SET
+                    code.code_uuid = chunk.code_uuid,
+                    code.file_uuid = $file_uuid,
+                    code.insert_number = $insert_number,
+                    code.code_data = chunk.code_data,
+                    code.description = chunk.description,
+                    code.technique_id = chunk.technique_id,
+                    code.chunk_start_line = chunk.chunk_start_line,
+                    code.chunk_end_line = chunk.chunk_end_line,
+                    code.have_code = chunk.have_code,
+                    code.relevance = chunk.relevance,
+                    code.code_embedding = chunk.code_embedding
+                RETURN elementId(code) as chunk_element_id, chunk.code_uuid as code_uuid
+                """
+                
+                chunks_data = [
+                    {
+                        "code_uuid": c["code_uuid"],
+                        "code_data": c["code_data"],
+                        "description": c.get("description"),        # 有技术的为字符串，无技术为 None
+                        "technique_id": c["technique_id"],         # 无技术为 None
+                        "chunk_start_line": c["chunk_start_line"],
+                        "chunk_end_line": c["chunk_end_line"],
+                        "have_code": c["have_code"],
+                        "relevance": c["relevance"],
+                        "code_embedding": c.get("code_embedding"),  # 所有代码块都有 embedding（可能为 None）
+                    }
+                    for c in all_chunks_data
+                ]
+                
+                result2 = session.run(
+                    batch_merge_query,
+                    chunks=chunks_data,
+                    file_uuid=file_uuid,
+                    insert_number=insert_number,
                 )
                 
-                with driver.session() as session:
-                    merge_code_query = """
-                    MERGE (code:BaseEntity:MitreAttackCodeSoftwareCodeChunk {code_uuid: $code_uuid})
-                    ON CREATE SET
-                        code.code_uuid = $code_uuid,
-                        code.file_uuid = $file_uuid,
-                        code.insert_number = $insert_number,
-                        code.code_data = $code_data,
-                        code.description = $description,
-                        code.technique_id = $technique_id,
-                        code.chunk_start_line = $chunk_start_line,
-                        code.chunk_end_line = $chunk_end_line,
-                        code.have_code = $have_code,
-                        code.relevance = $relevance
-                    RETURN elementId(code) as chunk_element_id
-                    """
-                    result2 = session.run(
-                        merge_code_query,
-                        code_uuid=code_uuid,
-                        file_uuid=file_uuid,
-                        insert_number=insert_number,
-                        code_data=code_data,
-                        description=description,
-                        technique_id=technique_id,
-                        chunk_start_line=chunk_start_line,
-                        chunk_end_line=chunk_end_line,
-                        have_code=have_code,
-                        relevance=relevance,
-                    )
-                    chunk_element_id = result2.single()["chunk_element_id"]
+                # 创建 code_uuid -> elementId 的映射，用于同步到 all_chunks_data
+                element_id_map = {}
+                for record in result2:
+                    chunk_element_id = record["chunk_element_id"]
+                    code_uuid = record["code_uuid"]
+                    element_id_map[code_uuid] = chunk_element_id
                     all_chunk_element_id.append(chunk_element_id)
-                logger.info(f"[handle_json_file] 代码块节点 MERGE 成功 code_uuid={code_uuid}, elementId={chunk_element_id}")
-                code_index += 1
+                    logger.info(
+                        f"[handle_json_file] 代码块节点 MERGE 成功 code_uuid={code_uuid}, "
+                        f"elementId={chunk_element_id}"
+                    )
+                
+                logger.info(
+                    f"[handle_json_file] 批量插入 {len(all_chunks_data)} 个代码块到 Neo4j 完成"
+                )
+            
+            # 为所有代码块同步 elementId，用于 Milvus
+            for chunk_info in all_chunks_data:
+                code_uuid = chunk_info["code_uuid"]
+                chunk_info["element_id"] = element_id_map.get(code_uuid)
+            
+            # 保存所有代码块信息（用于 Milvus），描述、elementId 和 embedding 已同步
+            all_chunks_for_milvus.extend(all_chunks_data)
     else:
         logger.info("[handle_json_file] 未提供 software_files 数据")
+    
     all_chunk_element_id.append(software_element_id)
-    logger.info(f"[handle_json_file] 总计文件UUID {len(all_file_ids)} 个，代码块节点 {len(all_chunk_element_id) - 1} 个")
-    return all_file_ids, software_uuid, all_chunk_element_id
+    logger.info(f"[handle_json_file] 总计文件UUID {len(all_file_ids)} 个，Neo4j代码块节点 {len(all_chunk_element_id) - 1} 个，Milvus代码块 {len(all_chunks_for_milvus)} 个")
+    
+    # 返回 Neo4j 的 element_id 和所有代码块信息（用于 Milvus）
+    return all_file_ids, software_uuid, all_chunk_element_id, all_chunks_for_milvus
 
 def send_request_embedding(text):
     # text 形如 [element_id, description]
@@ -434,7 +570,7 @@ def add_embedding_data_to_neo4j():
     获取 Neo4j 中的 code_data，生成 code_embedding，并写回节点。
     description 仅保存文本，不再生成 embedding。
     """
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         search_code_query = """
         MATCH (n:MitreAttackCodeSoftwareCodeChunk)
         WHERE n.code_data IS NOT NULL
@@ -466,7 +602,7 @@ def add_embedding_data_to_neo4j():
             continue
         
         code_embedding = embeddings_list[0]
-        with driver.session() as session:
+        with driver.session(**SESSION_KWARGS) as session:
             update_query = """
             MATCH (n)
             WHERE elementId(n) = $element_id
@@ -487,7 +623,7 @@ def add_embedding_data_to_neo4j():
 def add_relateship(all_file_ids, software_uuid, insert_number):
     insert_number = 0
     """添加三种节点的关系：软件-文件、文件-代码片段、代码片段-技术"""
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         # 1. 软件节点和文件节点的关系
         for file_uuid in all_file_ids:
             # 建立软件节点和文件节点的双向关系
@@ -572,7 +708,7 @@ def _ensure_milvus_collection():
         print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
         
         try:
-            # 定义字段：code_data + description + code__embedding
+            # 定义字段：neo4j_id + code_data + description + code__embedding + soft_name + url
             fields = [
                 FieldSchema(
                     name="neo4j_id",
@@ -605,6 +741,18 @@ def _ensure_milvus_collection():
                     name="code__embedding",
                     dtype=DataType.FLOAT_VECTOR,
                     dim=vector_dim,
+                ),
+                # 新增：所属软件名称
+                FieldSchema(
+                    name="soft_name",
+                    dtype=DataType.VARCHAR,
+                    max_length=512,
+                ),
+                # 新增：软件仓库 URL（暂时为空，后续可更新）
+                FieldSchema(
+                    name="url",
+                    dtype=DataType.VARCHAR,
+                    max_length=1024,
                 ),
                 FieldSchema(
                     name="sparse_vector",
@@ -766,7 +914,7 @@ def add_milvus(all_embedding_element_id):
     """
     
     try:
-        with driver.session() as session:
+        with driver.session(**SESSION_KWARGS) as session:
             result = session.run(query, element_ids=all_embedding_element_id)
             all_records = list(result)
     except Exception as e:
@@ -837,19 +985,43 @@ def add_milvus(all_embedding_element_id):
     
     print(f"准备插入 {len(neo4j_ids)} 条有效记录")
     
-    # 批量插入数据
+    # 批量插入数据 - 分批处理以避免 gRPC 消息大小限制
     if neo4j_ids:
         try:
-            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
-            entities = [neo4j_ids, code_datas, descriptions, embeddings]
-            print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
-            result = collection.upsert(entities)
-            print(f"Upsert 返回结果: {result}")
-            success_count = len(neo4j_ids)
+            # 设置每批插入的记录数（根据实际情况调整，建议 500-2000）
+            BATCH_SIZE = 1000
             
-            # 每100条打印一次进度
-            if success_count % 100 == 0:
-                print(f"已成功导入{success_count}条记录...")
+            total_batches = (len(neo4j_ids) + BATCH_SIZE - 1) // BATCH_SIZE
+            print(f"将分 {total_batches} 批插入数据，每批 {BATCH_SIZE} 条记录...")
+            print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
+            
+            for batch_idx in range(0, len(neo4j_ids), BATCH_SIZE):
+                batch_end = min(batch_idx + BATCH_SIZE, len(neo4j_ids))
+                batch_neo4j_ids = neo4j_ids[batch_idx:batch_end]
+                batch_code_datas = code_datas[batch_idx:batch_end]
+                batch_descriptions = descriptions[batch_idx:batch_end]
+                batch_embeddings = embeddings[batch_idx:batch_end]
+                
+                # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
+                batch_entities = [batch_neo4j_ids, batch_code_datas, batch_descriptions, batch_embeddings]
+                
+                current_batch = (batch_idx // BATCH_SIZE) + 1
+                print(f"正在插入第 {current_batch}/{total_batches} 批 ({len(batch_neo4j_ids)} 条记录)...")
+                
+                try:
+                    result = collection.upsert(batch_entities)
+                    success_count += len(batch_neo4j_ids)
+                    print(f"第 {current_batch} 批插入成功，累计已导入 {success_count} 条记录...")
+                except MilvusException as e:
+                    print(f"第 {current_batch} 批插入失败: {str(e)}")
+                    print(f"错误类型: {type(e).__name__}")
+                    error_count += len(batch_neo4j_ids)
+                    # 继续处理下一批
+                except Exception as e:
+                    print(f"第 {current_batch} 批插入时发生未知错误: {str(e)}")
+                    print(f"错误类型: {type(e).__name__}")
+                    error_count += len(batch_neo4j_ids)
+                    # 继续处理下一批
             
             # 验证插入是否成功 - 查询 collection 中的记录数
             try:
@@ -860,18 +1032,192 @@ def add_milvus(all_embedding_element_id):
                 print(f"查询 collection 记录数时出错: {e}")
             
             print(f"导入完成！成功: {success_count}, 失败: {error_count}")
-        except MilvusException as e:
-            print(f"Milvus 批量插入失败: {str(e)}")
-            print(f"错误类型: {type(e).__name__}")
-            import traceback
-            traceback.print_exc()
-            error_count += len(neo4j_ids)
         except Exception as e:
-            print(f"插入数据时发生未知错误: {str(e)}")
+            print(f"插入数据时发生严重错误: {str(e)}")
             print(f"错误类型: {type(e).__name__}")
             import traceback
             traceback.print_exc()
-            error_count += len(neo4j_ids)
+            error_count += len(neo4j_ids) - success_count
+    else:
+        print("没有有效数据需要导入")
+
+def add_milvus_from_chunks(all_chunks_data):
+    """直接从代码块数据添加到 Milvus 向量数据库（全量入库）
+
+    约定：
+    - 每个 chunk_info 中如果包含 soft_name 字段，则写入 Milvus 的 soft_name 字段；
+      否则 soft_name 置为空字符串。
+    - url 字段暂时统一置为空字符串，后续通过脚本或其他逻辑更新。
+    """
+    if not milvus_connected:
+        print("错误: Milvus 未连接，无法插入数据")
+        return
+    
+    if not all_chunks_data:
+        print("没有代码块数据需要导入")
+        return
+    
+    print(f"准备将 {len(all_chunks_data)} 个代码块导入 Milvus（全量）")
+    
+    # 确保 collection 存在
+    try:
+        collection = _ensure_milvus_collection()
+    except Exception as e:
+        print(f"确保 collection 存在时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    success_count = 0
+    error_count = 0
+    
+    # 第一步：为所有代码块生成 embedding（使用已同步的 description，不再重新生成）
+    logger.info(f"[add_milvus_from_chunks] 开始为 {len(all_chunks_data)} 个代码块生成 embedding（使用已同步的 description）")
+    
+    def process_chunk(chunk_info):
+        """处理单个代码块：使用已同步的 description（如果有），生成 embedding"""
+        code_data = chunk_info["code_data"]
+        file_name = chunk_info.get("file_name", "未知文件")
+        
+        # 使用已同步的 description（只对有技术的代码块有值，没有技术的为 None）
+        description = chunk_info.get("description", None)
+        if description is None:
+            # 没有技术的代码块，description 为空字符串
+            description = ""
+        
+        # 优先使用 elementId（Neo4j 的 elementId），如果没有则使用 code_uuid（不在 Neo4j 中的代码块）
+        neo4j_element_id = chunk_info.get("element_id")
+        if neo4j_element_id:
+            # 有技术的代码块，使用 Neo4j 的 elementId
+            neo4j_id = neo4j_element_id
+        else:
+            # 没有技术的代码块，使用 code_uuid（虽然不在 Neo4j 中，但可以作为 Milvus 的唯一标识）
+            neo4j_id = chunk_info["code_uuid"]
+            logger.debug(f"[add_milvus_from_chunks] 代码块 {chunk_info['code_uuid']} 不在 Neo4j 中，使用 code_uuid 作为 neo4j_id")
+        
+        # 生成 embedding（所有代码块都需要）
+        embedding_result = send_request_embedding([neo4j_id, code_data])
+        
+        if embedding_result:
+            texts_ids, embeddings_list = embedding_result
+            if embeddings_list:
+                return {
+                    "neo4j_id": neo4j_id,  # 使用 Neo4j 的 elementId（如果有），否则使用 code_uuid
+                    "code_data": code_data,
+                    "description": description,  # 有技术的使用已生成的描述，没有技术的为空字符串
+                    "embedding": embeddings_list[0],
+                    # 从原始 chunk_info 透传 soft_name（如果有）
+                    "soft_name": chunk_info.get("soft_name", ""),
+                }
+        
+        return None
+    
+    # 并发生成 embedding（description 已从 handle_json_file 同步）
+    processed_chunks = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_chunk = {
+            executor.submit(process_chunk, chunk_info): chunk_info
+            for chunk_info in all_chunks_data
+        }
+        
+        for future in as_completed(future_to_chunk):
+            chunk_info = future_to_chunk[future]
+            try:
+                result = future.result()
+                if result:
+                    processed_chunks.append(result)
+                else:
+                    error_count += 1
+                    logger.warning(f"[add_milvus_from_chunks] 代码块 {chunk_info['code_uuid']} 处理失败")
+            except Exception as e:
+                error_count += 1
+                logger.error(f"[add_milvus_from_chunks] 代码块 {chunk_info['code_uuid']} 处理异常: {e}")
+    
+    logger.info(f"[add_milvus_from_chunks] 完成处理，成功 {len(processed_chunks)} 个，失败 {error_count} 个")
+    
+    # 准备批量插入数据
+    neo4j_ids = []
+    code_datas = []
+    descriptions = []
+    embeddings = []
+    soft_names = []
+    
+    for chunk_result in processed_chunks:
+        neo4j_id = chunk_result["neo4j_id"]
+        code_data = chunk_result["code_data"]
+        description = chunk_result["description"]
+        embedding = chunk_result["embedding"]
+        soft_name = chunk_result.get("soft_name", "")
+        
+        # 验证向量维度
+        if not isinstance(embedding, list) or len(embedding) != 1024:
+            error_count += 1
+            logger.warning(f"[add_milvus_from_chunks] 代码块 {neo4j_id} 向量维度不正确")
+            continue
+        
+        neo4j_ids.append(neo4j_id)
+        code_datas.append(code_data)
+        descriptions.append(description)
+        embeddings.append(embedding)
+        soft_names.append(soft_name)
+    
+    print(f"准备插入 {len(neo4j_ids)} 条有效记录到 Milvus")
+    
+    # 批量插入数据
+    if neo4j_ids:
+        try:
+            BATCH_SIZE = 1000
+            total_batches = (len(neo4j_ids) + BATCH_SIZE - 1) // BATCH_SIZE
+            print(f"将分 {total_batches} 批插入数据，每批 {BATCH_SIZE} 条记录...")
+            
+            for batch_idx in range(0, len(neo4j_ids), BATCH_SIZE):
+                batch_end = min(batch_idx + BATCH_SIZE, len(neo4j_ids))
+                batch_neo4j_ids = neo4j_ids[batch_idx:batch_end]
+                batch_code_datas = code_datas[batch_idx:batch_end]
+                batch_descriptions = descriptions[batch_idx:batch_end]
+                batch_embeddings = embeddings[batch_idx:batch_end]
+                batch_soft_names = soft_names[batch_idx:batch_end]
+                batch_urls = [""] * len(batch_neo4j_ids)  # url 先统一为空
+
+                # 字段顺序与 schema 定义一致:
+                # neo4j_id, code_data, description, code__embedding, soft_name, url
+                batch_entities = [
+                    batch_neo4j_ids,
+                    batch_code_datas,
+                    batch_descriptions,
+                    batch_embeddings,
+                    batch_soft_names,
+                    batch_urls,
+                ]
+                
+                current_batch = (batch_idx // BATCH_SIZE) + 1
+                print(f"正在插入第 {current_batch}/{total_batches} 批 ({len(batch_neo4j_ids)} 条记录)...")
+                
+                try:
+                    result = collection.upsert(batch_entities)
+                    success_count += len(batch_neo4j_ids)
+                    print(f"第 {current_batch} 批插入成功，累计已导入 {success_count} 条记录...")
+                except MilvusException as e:
+                    print(f"第 {current_batch} 批插入失败: {str(e)}")
+                    error_count += len(batch_neo4j_ids)
+                except Exception as e:
+                    print(f"第 {current_batch} 批插入时发生未知错误: {str(e)}")
+                    error_count += len(batch_neo4j_ids)
+            
+            # 验证插入是否成功
+            try:
+                collection.flush()
+                num_entities = collection.num_entities
+                print(f"Collection {MILVUS_COLLECTION} 当前包含 {num_entities} 条记录")
+            except Exception as e:
+                print(f"查询 collection 记录数时出错: {e}")
+            
+            print(f"Milvus 导入完成！成功: {success_count}, 失败: {error_count}")
+        except Exception as e:
+            print(f"插入数据时发生严重错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            error_count += len(neo4j_ids) - success_count
     else:
         print("没有有效数据需要导入")
 
@@ -879,12 +1225,18 @@ def handle_code(source_name, file_path, file_name, file_type, extract_dir, inser
     result = analysis_code(extract_dir, source_name)
     
     try:
-        all_file_ids, software_uuid, all_embedding_element_id = handle_json_file(result.to_dict(), insert_number)
-        add_embedding_data_to_neo4j()
+        # 修改：返回所有代码块信息（用于 Milvus）
+        all_file_ids, software_uuid, all_embedding_element_id, all_chunks_for_milvus = handle_json_file(result.to_dict(), insert_number)
+        
+        # 注意：embedding 已在 handle_json_file 中生成并插入 Neo4j，无需再调用 add_embedding_data_to_neo4j()
+        # 如果 Neo4j 中有历史数据没有 embedding，可以单独调用 add_embedding_data_to_neo4j() 处理
+        
+        # 建立关系（只针对 Neo4j 中的代码块）
         add_relateship(all_file_ids, software_uuid, insert_number)
         
-        # 最后添加 milvus
-        add_milvus(all_embedding_element_id)        
+        # 全量入库 Milvus：包括所有代码块（有技术和无技术的）
+        add_milvus_from_chunks(all_chunks_for_milvus)
+        
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -32,7 +32,7 @@ class RedKBSAnalyzer:
                         "base_url": "https://api.openai.com/v1",  # 可选
                         "model": "gpt-3.5-turbo",
                         "temperature": 0.1,
-                        "max_tokens": 2000
+                        "max_tokens": 6000
                     },
                     "fallback": {
                         "enabled": True,

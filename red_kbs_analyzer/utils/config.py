@@ -64,7 +64,7 @@ class LLMConfig:
                  base_url: Optional[str] = None,
                  model: str = "gpt-3.5-turbo",
                  temperature: float = 0.1,
-                 max_tokens: int = 2000):
+                 max_tokens: int = 6000):
         """
         初始化LLM配置
         
@@ -137,7 +137,7 @@ def create_openai_llm_config(api_key: str,
             "base_url": base_url,
             "model": model,
             "temperature": 0.1,
-            "max_tokens": 2000
+            "max_tokens": 6000
         },
         "fallback": {
             "enabled": True,
@@ -196,7 +196,7 @@ class Settings:
         self.llm_primary_base_url = os.getenv("LLM_BASE_URL")
         self.llm_primary_model = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
         self.llm_temperature = float(os.getenv("LLM_TEMPERATURE", 0.1))
-        self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", 2000))
+        self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", 6000))
     
     def get_llm_config(self) -> Dict[str, Any]:
         """获取LLM配置"""

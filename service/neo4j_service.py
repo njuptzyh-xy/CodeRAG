@@ -1,8 +1,10 @@
 # from neo4j_driver import driver
 from neo4j import GraphDatabase
-from setting import NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI
+from setting import NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI, NEO4J_DATABASE
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+
+SESSION_KWARGS = {"database": NEO4J_DATABASE}
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
@@ -12,7 +14,7 @@ def get_description_by_id(mitre_attack_id):
     WHERE n.attack_id = "{mitre_attack_id}"
     RETURN n.description as description
     """
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query)
         result_data = result.single() if result.peek() else None
     
@@ -31,7 +33,7 @@ def get_data_by_id(mitre_attack_id):
     WHERE n.attack_id = "{mitre_attack_id}"
     RETURN elementId(article) as document_neo_id, article.title as title, article.article_summary as summary
     """
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query)
         for record in result:
             document_list.append({
@@ -48,7 +50,7 @@ def get_data_by_id(mitre_attack_id):
     WHERE n.attack_id = "{mitre_attack_id}"
     RETURN code.file_uuid as file_uuid
     """
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         code_file_uuid_result = session.run(code_file_query)
         for code_file_record in code_file_uuid_result:
             code_file_uuid_list.append(code_file_record.get("file_uuid"))
@@ -66,7 +68,7 @@ def get_data_by_id(mitre_attack_id):
         WHERE file.file_uuid = "{file_uuid_item}"
         RETURN software.name as software_name, software.description as software_description, elementId(software) as software_element_id
         """
-        with driver.session() as session:
+        with driver.session(**SESSION_KWARGS) as session:
             code_software_result = session.run(code_software_query)
             for code_software_record in code_software_result:
                 single_software_name = code_software_record.get("software_name")
@@ -103,7 +105,7 @@ def get_detail_by_ids(neo_ids):
                        article.mitre_attack_id_list as mitre_attack_id_list,
                        elementId(article) as article_id
             """
-            with driver.session() as session:
+            with driver.session(**SESSION_KWARGS) as session:
                 result = session.run(query)
                 result_data = result.single() if result.peek() else None
 
@@ -150,7 +152,7 @@ def get_detail_by_ids(neo_ids):
             software_description = "无描述"
             software_id = element_id
 
-            with driver.session() as session:
+            with driver.session(**SESSION_KWARGS) as session:
                 software_result = session.run(software_info_query)
                 software_data = software_result.single() if software_result.peek() else None
 
@@ -168,7 +170,7 @@ def get_detail_by_ids(neo_ids):
                 WHERE elementId(software) = "{element_id}"
                 RETURN file.file_uuid as file_uuid, file.name as file_name
             """
-            with driver.session() as session:
+            with driver.session(**SESSION_KWARGS) as session:
                 file_result = session.run(query)
                 for file_record in file_result:
                     file_id_list.append(file_record.get("file_uuid"))
@@ -184,7 +186,7 @@ def get_detail_by_ids(neo_ids):
                 WHERE file.file_uuid = "{file_item}"
                 RETURN code.chunk_start_line as start_line, code.code_data as code_data
                 """
-                with driver.session() as session:
+                with driver.session(**SESSION_KWARGS) as session:
                     code_result = session.run(code_query)
                     for code_record in code_result:
                         code_str_list.append([code_record.get("start_line"), code_record.get("code_data")])
@@ -218,7 +220,7 @@ def get_article_and_software_count():
         RETURN count(n) AS software_count
     """
     
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         article_result = session.run(article_count_query)
         article_count = article_result.single()["article_count"]
 
@@ -244,7 +246,7 @@ def get_articles_by_attack_id(attack_id):
     """
 
     articles = []
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query, attack_id=attack_id)
         for record in result:
             # 处理描述，截取前50个字
@@ -285,7 +287,7 @@ def get_all_articles():
     """
 
     articles = []
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query)
         for record in result:
             # 处理描述，截取前100个字
@@ -330,7 +332,7 @@ def get_all_software():
     """
 
     software_list = []
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query)
         for record in result:
             # 处理描述，截取前200个字
@@ -376,7 +378,7 @@ def get_software_techniques_tactics(software_id):
     """
 
     tactics_dict = {}
-    with driver.session() as session:
+    with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query, software_id=software_id)
         for record in result:
             tactic_id = record.get('tactic_id', '')

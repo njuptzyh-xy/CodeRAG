@@ -20,3 +20,11 @@ codecontext-python/
 che_milvus.py
 test.py
 upload_client.py
+add_fields_to_milvus.py
+batch_insert_milvus.py
+batch_upload_files.py
+delete_software_data.py
+docker-compose-neo4j.yml
+neo4j_to_milvus.py
+update_softname_in_milvus.py
+verify_batch.py

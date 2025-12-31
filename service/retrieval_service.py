@@ -72,7 +72,7 @@ class RetrievalRoute:
         self.question = question                                               # 问题
         self.question_embedding = self._get_question_embedding()               # 问题向量
         self.strategy_dict = {                                                 # 策略字典
-            "hybrid_search": self.hybrid_search, # 混合检索  全文+向量融合检索  适合问题里含具体实体、需要语义理解的场景
+            "hybrid_search": self.hybrid_search, # 向量检索  纯向量检索  适合问题里含具体实体、需要语义理解的场景
             "graph_search": self.graph_search, # 图谱检索  通过图谱查询  暂时未实现
             "vector_expansion": self.vector_expansion_search # 向量扩展  通过向量扩展查询  适合问题里没有具体实体、需要语义理解的场景 兜底策略
         }
@@ -167,8 +167,8 @@ class RetrievalRoute:
     def hybrid_search(self):
         final_result= [] 
         
-        # 调用 es 混合搜索
-        es_data = self.es.hybrid_search(self.question, self.question_embedding) 
+        # 调用向量检索（已移除全文检索和融合逻辑）
+        es_data = self.es.search_by_calculate_similarity(self.question_embedding) 
         
         # 接下来进行 neo4j 的数据收集和返回
         for es_item in es_data:
@@ -219,7 +219,7 @@ class RetrievalRoute:
         
         print("=================\n", search_strategy)
         # 有了策略之后进行分函数处理, 
-        # hybrid_search 混合检索， graph_query 生成语句检索， vector_expansion 向量比对两跳查询
+        # hybrid_search 向量检索， graph_query 生成语句检索， vector_expansion 向量比对两跳查询
         result = self.strategy_dict.get(search_strategy)()
         
         return result

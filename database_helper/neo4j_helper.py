@@ -1,6 +1,6 @@
 from neo4j import GraphDatabase
 from neo4j.time import Date, DateTime, Duration, Time
-from setting import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NODE_RETURN_FIELDS
+from setting import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NODE_RETURN_FIELDS, NEO4J_DATABASE
 
 
 class Neo4jHelper:
@@ -12,6 +12,7 @@ class Neo4jHelper:
         try:
             self.auth = (NEO4J_USER, NEO4J_PASSWORD)
             self.neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=self.auth)
+            self.session_kwargs = {"database": NEO4J_DATABASE}
         except Exception as e:
             print(f"Authentication failed: {e}")
             return None
@@ -45,7 +46,7 @@ class Neo4jHelper:
                 RETURN labels(n) AS nodeLabels
             """ 
             # 执行查询
-            with self.neo4j_driver.session() as session:
+            with self.neo4j_driver.session(**self.session_kwargs) as session:
                 type_result = session.run(node_type_query, element_id=neo_id)
                 # 只有一条数据，所以使用 single
                 type_record = type_result.single()
@@ -82,7 +83,7 @@ class Neo4jHelper:
         
         return_dict = {}
         # 执行查询
-        with self.neo4j_driver.session() as session:
+        with self.neo4j_driver.session(**self.session_kwargs) as session:
             search_data_result = session.run(node_data_query, element_id=neo_id)
             search_data_record = search_data_result.single()
             if search_data_record:
@@ -111,7 +112,7 @@ class Neo4jHelper:
             LIMIT 1
         """
         
-        with self.neo4j_driver.session() as session:
+        with self.neo4j_driver.session(**self.session_kwargs) as session:
             result = session.run(query, description=description)
             record = result.single()
             if not record:
@@ -155,7 +156,7 @@ class Neo4jHelper:
         
         # 执行查询
         neighbors = []
-        with self.neo4j_driver.session() as session:
+        with self.neo4j_driver.session(**self.session_kwargs) as session:
             result = session.run(query, element_id=node_id)
             for record in result:
                 neighbors.append({
@@ -181,7 +182,7 @@ class Neo4jHelper:
                         neighbor as node_data
                 """
                 code_nodes = []
-                with self.neo4j_driver.session() as session:
+                with self.neo4j_driver.session(**self.session_kwargs) as session:
                     code_result = session.run(query_find_code, code_file_element_id=code_element_id)
                     for code_record in code_result:
                         code_nodes.append({
