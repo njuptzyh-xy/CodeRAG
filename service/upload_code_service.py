@@ -1204,7 +1204,7 @@ def add_milvus_from_chunks(all_chunks_data):
                     print(f"第 {current_batch} 批插入时发生未知错误: {str(e)}")
                     error_count += len(batch_neo4j_ids)
             
-            # 验证插入是否成功
+            # 验证插入是否成功 / 可删除
             try:
                 collection.flush()
                 num_entities = collection.num_entities

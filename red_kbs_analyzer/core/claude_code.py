@@ -149,7 +149,7 @@ async def generate_project_summary_with_claude(project: RedTool, processed_files
    - 核心业务逻辑代码文件；
    - 重要配置文件（如数据库、网络、认证相关配置）；
    - 关键的工具类或库文件；
-   - 文档类文件（如 README 等）最多不能超过 2 个。
+   - 文档类文件（如 README.md 等）最多不能超过 2 个。
 
 重要要求：
 - 你返回的文件路径必须是真实存在的文件（不是目录），并且使用完整的绝对路径。

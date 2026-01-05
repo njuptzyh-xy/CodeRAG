@@ -8,7 +8,7 @@ import asyncio
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from ..models.project import RedTool, ProjectAnalysisResult
@@ -35,7 +35,7 @@ class ProjectAnalyzer:
                  max_workers: int = 20,
                  max_code_files: int = 100,  # 最大代码文件数量限制
                  max_code_length: int = 25000,  # 单个文件最大代码长度
-                 max_file_analysis_workers: int = 30,  # 文件分析并发数
+                 max_file_analysis_workers: int = 5,  # 文件分析并发数
                  llm_config: Optional[Dict[str, Any]] = None):
         """
         初始化项目分析器
@@ -189,14 +189,20 @@ class ProjectAnalyzer:
                 return None
             
             # 基于 AST 的代码分割（异步接口同步调用）
+            # 使用线程安全的方式，避免在 ThreadPoolExecutor 中使用 asyncio.run() 导致的死锁
             language = Path(code_file.file_name).suffix.lstrip(".").lower() or "text"
-            raw_chunks = asyncio.run(
-                self.ast_splitter.split(
-                    code=content,
-                    language=language,
-                    file_path=code_file.file_abs_path,
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                raw_chunks = loop.run_until_complete(
+                    self.ast_splitter.split(
+                        code=content,
+                        language=language,
+                        file_path=code_file.file_abs_path,
+                    )
                 )
-            )
+            finally:
+                loop.close()
 
             # 适配为内部的 CodeChunk 模型
             chunks = [
@@ -381,6 +387,10 @@ class ProjectAnalyzer:
         logger.info(f"开始并发处理 {len(valid_files)} 个有效文件...")
         file_results = []
         
+        # 记录所有要处理的文件名
+        file_names = [f.get('file_name', '') for f in valid_files]
+        logger.info(f"[文件技术分析] 待处理文件列表: {file_names}")
+        
         # 使用并发处理文件
         with ThreadPoolExecutor(max_workers=self.max_file_analysis_workers) as executor:
             future_to_file = {
@@ -388,15 +398,45 @@ class ProjectAnalyzer:
                 for file_dict in valid_files
             }
             
-            for future in as_completed(future_to_file):
-                file_dict = future_to_file[future]
-                try:
-                    result = future.result()
-                    if result:
-                        file_results.append(result)
-                except Exception as e:
-                    logger.error(f"分析文件 {file_dict.get('file_name', '')} 技术时出错: {e}")
-                    # 即使出错也添加一个失败的结果
+            total_files = len(future_to_file)
+            completed_count = 0
+            
+            logger.info(f"[文件技术分析] 已提交 {total_files} 个文件分析任务，开始等待完成...")
+            
+            # 设置超时时间（每个文件最多处理 30 分钟）
+            timeout_per_file = 30 * 60  # 30 分钟
+            
+            import time
+            # 记录每个 future 的提交时间
+            future_start_times = {future: time.time() for future in future_to_file.keys()}
+            remaining_futures = set(future_to_file.keys())
+            
+            # 使用较短的检查间隔，更快检测卡住的 future
+            check_interval = 30  # 每 30 秒检查一次
+            
+            while remaining_futures:
+                # 检查是否有 future 运行时间超过超时时间
+                current_time = time.time()
+                timed_out_futures = []
+                
+                for future in remaining_futures:
+                    elapsed_time = current_time - future_start_times[future]
+                    if elapsed_time > timeout_per_file:
+                        timed_out_futures.append(future)
+                        file_dict = future_to_file[future]
+                        logger.warning(
+                            f"[文件技术分析] 检测到文件 {file_dict.get('file_name', '')} "
+                            f"运行时间过长（{elapsed_time:.1f}秒），超过 {timeout_per_file} 秒，标记为超时"
+                        )
+                
+                # 处理超时的 future
+                for future in timed_out_futures:
+                    file_dict = future_to_file[future]
+                    completed_count += 1
+                    logger.error(
+                        f"[文件技术分析] 文件 {file_dict.get('file_name', '')} "
+                        f"处理超时（超过 {timeout_per_file} 秒），跳过该文件 ({completed_count}/{total_files})"
+                    )
                     file_results.append({
                         "file_name": file_dict.get("file_name", ""),
                         "file_abs_path": file_dict.get("file_abs_path", ""),
@@ -404,10 +444,79 @@ class ProjectAnalyzer:
                             "result": False,
                             "ttps": [],
                             "status": "failed",
-                            "error": str(e)
+                            "error": f"处理超时（超过 {timeout_per_file} 秒）"
                         }
                     })
+                    remaining_futures.remove(future)
+                
+                if not remaining_futures:
+                    break
+                
+                # 等待至少一个 future 完成，使用较短的超时时间以便定期检查
+                done, not_done = wait(remaining_futures, timeout=check_interval, return_when=FIRST_COMPLETED)
+                
+                # 处理已完成的 future
+                for future in done:
+                    file_dict = future_to_file[future]
+                    completed_count += 1
+                    try:
+                        logger.info(f"[文件技术分析] 收到文件 {file_dict.get('file_name', '')} 的分析结果 ({completed_count}/{total_files})")
+                        # 已完成的任务应该很快返回结果，设置较短的超时时间（5秒）
+                        result = future.result(timeout=5)
+                        if result:
+                            file_results.append(result)
+                            logger.info(f"[文件技术分析] 文件 {file_dict.get('file_name', '')} 分析完成并添加到结果列表 ({completed_count}/{total_files})")
+                        else:
+                            logger.warning(f"[文件技术分析] 文件 {file_dict.get('file_name', '')} 分析返回空结果 ({completed_count}/{total_files})")
+                            # 空结果也添加，避免丢失
+                            file_results.append({
+                                "file_name": file_dict.get("file_name", ""),
+                                "file_abs_path": file_dict.get("file_abs_path", ""),
+                                "file_technique": {
+                                    "result": False,
+                                    "ttps": [],
+                                    "status": "failed",
+                                    "error": "分析返回空结果"
+                                }
+                            })
+                    except FutureTimeoutError:
+                        logger.error(f"[文件技术分析] 文件 {file_dict.get('file_name', '')} 获取结果超时，跳过该文件 ({completed_count}/{total_files})")
+                        file_results.append({
+                            "file_name": file_dict.get("file_name", ""),
+                            "file_abs_path": file_dict.get("file_abs_path", ""),
+                            "file_technique": {
+                                "result": False,
+                                "ttps": [],
+                                "status": "failed",
+                                "error": "获取结果超时"
+                            }
+                        })
+                    except Exception as e:
+                        logger.error(f"分析文件 {file_dict.get('file_name', '')} 技术时出错: {e}", exc_info=True)
+                        file_results.append({
+                            "file_name": file_dict.get("file_name", ""),
+                            "file_abs_path": file_dict.get("file_abs_path", ""),
+                            "file_technique": {
+                                "result": False,
+                                "ttps": [],
+                                "status": "failed",
+                                "error": str(e)
+                            }
+                        })
+                        logger.info(f"[文件技术分析] 文件 {file_dict.get('file_name', '')} 分析失败但已添加到结果列表 ({completed_count}/{total_files})")
+                
+                # 更新剩余 future
+                remaining_futures = not_done
+                
+                # 定期记录进度
+                if completed_count % 10 == 0 or len(remaining_futures) == 0:
+                    elapsed_time = time.time() - min(future_start_times.values()) if future_start_times else 0
+                    logger.info(
+                        f"[文件技术分析] 进度: {completed_count}/{total_files} 完成，"
+                        f"剩余 {len(remaining_futures)} 个，已用时 {elapsed_time:.1f} 秒"
+                    )
         
+        logger.info(f"[文件技术分析] 所有文件分析完成，共处理 {len(file_results)} 个文件")
         return file_results
     
     def _analyze_single_file_technique(self, 
@@ -493,6 +602,8 @@ class ProjectAnalyzer:
             else:
                 logger.warning(f"[文件技术分析] 第 {batch_idx + 1} 批分析失败")
         
+        logger.info(f"[文件技术分析] 所有批次分析完成，共 {len(batch_chunks_list)} 批，累计 {len(all_ttps)} 个技术")
+        
         # 合并所有批次的结果
         merged_result = {
             "result": all_success,
@@ -500,17 +611,28 @@ class ProjectAnalyzer:
             "status": "success" if all_success else "failed"
         }
         
+        logger.info(f"[文件技术分析] 合并结果完成，状态: {merged_result.get('status')}")
+        
         # 补充原始chunk信息
         if merged_result.get("status") == "success":
-            for ttp in merged_result.get("ttps", []):
+            logger.info(f"[文件技术分析] 开始补充 chunk 信息，ttps 数量: {len(merged_result.get('ttps', []))}, chunks 数量: {len(chunks)}")
+            
+            # 优化：使用字典索引，避免 O(n*m) 复杂度
+            chunk_dict = {chunk.get("chunk_number", 0): chunk for chunk in chunks}
+            
+            for ttp_idx, ttp in enumerate(merged_result.get("ttps", [])):
                 chunk_num = ttp.get("chunk_number", 0)
-                # 从原始chunks中找到对应编号的chunk
-                for chunk in chunks:
-                    if chunk.get("chunk_number", 0) == chunk_num:
-                        ttp["chunk_code"] = chunk.get("code", "")
-                        ttp["chunk_start_line"] = chunk.get("start_line", 0)
-                        ttp["chunk_end_line"] = chunk.get("end_line", 0)
-                        break
+                chunk = chunk_dict.get(chunk_num)
+                if chunk:
+                    ttp["chunk_code"] = chunk.get("code", "")
+                    ttp["chunk_start_line"] = chunk.get("start_line", 0)
+                    ttp["chunk_end_line"] = chunk.get("end_line", 0)
+                else:
+                    logger.warning(f"[文件技术分析] 未找到 chunk_number={chunk_num} 对应的 chunk")
+            
+            logger.info(f"[文件技术分析] chunk 信息补充完成")
+        
+        logger.info(f"[文件技术分析] 文件 {file_name} 分析完成，准备返回结果")
         
         return {
             "file_name": file_name,
@@ -638,14 +760,28 @@ class ProjectAnalyzer:
                     file_path=file_dict.get("file_abs_path", "")
                 )
                 
-                # 调用 Claude Code
-                result = asyncio.run(
-                    analyze_file_technique_with_claude(
-                        prompt=prompt,
-                        file_path=file_dict.get("file_abs_path", ""),
-                        project=project
+                # 调用 Claude Code - 使用线程安全的方式
+                # 为当前线程创建独立的事件循环，避免在 ThreadPoolExecutor 中使用 asyncio.run() 导致的死锁
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    # 添加超时机制，避免无限等待（30分钟）
+                    timeout_seconds = 30 * 60
+                    result = loop.run_until_complete(
+                        asyncio.wait_for(
+                            analyze_file_technique_with_claude(
+                                prompt=prompt,
+                                file_path=file_dict.get("file_abs_path", ""),
+                                project=project
+                            ),
+                            timeout=timeout_seconds
+                        )
                     )
-                )
+                except asyncio.TimeoutError:
+                    logger.error(f"[文件技术分析] Claude Code 分析超时（超过 {timeout_seconds} 秒）")
+                    result = None
+                finally:
+                    loop.close()
                 
                 if result and result.get("status") == "success":
                     logger.info(f"[文件技术分析] Claude Code 分析成功")
