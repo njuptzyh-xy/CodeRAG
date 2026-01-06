@@ -147,7 +147,25 @@ def judge_data_about_safe(response_data):
         temperature=0,
         stream=False
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # 获取原始内容
+    content = response.choices[0].message.content
+    
+    # 提取 JSON 内容（去除 markdown 代码块）
+    json_content = extract_json_from_content(content)
+    
+    if not json_content:
+        print(f"错误: 无法从响应中提取 JSON 内容")
+        return {"sign": 0}
+    
+    # 解析 JSON
+    try:
+        return json.loads(json_content)
+    except json.JSONDecodeError as e:
+        print(f"错误: JSON 解析失败")
+        print(f"提取的内容: {json_content}")
+        print(f"解析错误: {e}")
+        return {"sign": 0}
 
 def get_picture_data_by_ocr(picture_data):
     ocr_url = OCR_URL
@@ -237,6 +255,28 @@ def get_all_documents_text(path, file_name):
     
     return save_path, new_file_name
 
+def extract_json_from_content(content):
+    """从 LLM 响应中提取 JSON 内容，去除 markdown 代码块标记"""
+    import re
+    if not content:
+        return None
+    
+    # 去除首尾空白
+    content = content.strip()
+    
+    # 匹配 ```json ... ``` 或 ``` ... ```
+    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+    if json_match:
+        return json_match.group(1).strip()
+    
+    # 如果没有代码块，尝试直接提取 JSON 对象
+    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+    if json_match:
+        return json_match.group(0).strip()
+    
+    # 如果都不匹配，返回原始内容（可能是纯 JSON）
+    return content
+
 def get_summary_for_document(document_text):
     user_prompt = f"""
         {document_text}
@@ -248,10 +288,12 @@ def get_summary_for_document(document_text):
         
         总结文章内容在 2000 字左右。
         
-        返回 json 数据:
-        {{"summary": "总结的内容"}}
+        严格按照以下格式返回 json 数据:
+        {{
+            "summary": "总结的内容"
+        }}
 
-        注意:只返回json数据
+        注意:只返回符合格式要求的json数据
     """
     
     client = OpenAI(
@@ -270,7 +312,26 @@ def get_summary_for_document(document_text):
         temperature=0,
         stream=False
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # 获取原始内容
+    content = response.choices[0].message.content
+    print(f"json响应为：{content}")
+    
+    # 提取 JSON 内容（去除 markdown 代码块）
+    json_content = extract_json_from_content(content)
+    
+    if not json_content:
+        print(f"错误: 无法从响应中提取 JSON 内容")
+        return {"summary": ""}
+    
+    # 解析 JSON
+    try:
+        return json.loads(json_content)
+    except json.JSONDecodeError as e:
+        print(f"错误: JSON 解析失败")
+        print(f"提取的内容: {json_content}")
+        print(f"解析错误: {e}")
+        return {"summary": ""}
 
 def get_all_documents_summary(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -285,15 +346,35 @@ def get_all_documents_summary(path):
     # 现在给每一段 part 做总结之后，在给所有的分总结一个总结
     part_summaries = []        # 这是分段总结结果列表
     for part_item in file_part:
-        summary = get_summary_for_document(part_item)
-        part_summaries.append(summary['summary']) # 假设返回字典里有'summary'字段
+        try:
+            summary = get_summary_for_document(part_item)
+            if summary and summary.get('summary'):
+                part_summaries.append(summary['summary'])
+            else:
+                print(f"警告: 分段总结返回空结果，跳过该段")
+        except Exception as e:
+            print(f"错误: 分段总结失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 继续处理下一段，不中断流程
+    
+    if not part_summaries:
+        print("错误: 所有分段总结都失败")
+        return "error"
     
     # 2. 汇总所有分段摘要
     all_summaries = "\n".join(part_summaries)
-    final_summary = get_summary_for_document(all_summaries)
-    if final_summary.get("summary"):
-        return final_summary.get("summary")
-    else:
+    try:
+        final_summary = get_summary_for_document(all_summaries)
+        if final_summary and final_summary.get("summary"):
+            return final_summary.get("summary")
+        else:
+            print("错误: 最终总结返回空结果")
+            return "error"
+    except Exception as e:
+        print(f"错误: 最终总结失败: {e}")
+        import traceback
+        traceback.print_exc()
         return "error"
 
 def map_document_technical_request(document_text):
@@ -315,7 +396,25 @@ def map_document_technical_request(document_text):
         temperature=0,
         stream=False
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # 获取原始内容
+    content = response.choices[0].message.content
+    
+    # 提取 JSON 内容（去除 markdown 代码块）
+    json_content = extract_json_from_content(content)
+    
+    if not json_content:
+        print(f"错误: 无法从响应中提取 JSON 内容")
+        return {"result": False, "ttps": []}
+    
+    # 解析 JSON
+    try:
+        return json.loads(json_content)
+    except json.JSONDecodeError as e:
+        print(f"错误: JSON 解析失败")
+        print(f"提取的内容: {json_content}")
+        print(f"解析错误: {e}")
+        return {"result": False, "ttps": []}
         
 def map_document_to_technical(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -529,7 +628,7 @@ def _ensure_milvus_collection():
         print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
         
         try:
-            # 定义字段：code_data + description + code__embedding
+            # 定义字段：code_data + description + code__embedding + soft_name + url
             fields = [
                 FieldSchema(
                     name="neo4j_id",
@@ -566,6 +665,16 @@ def _ensure_milvus_collection():
                 FieldSchema(
                     name="sparse_vector",
                     dtype=DataType.SPARSE_FLOAT_VECTOR,
+                ),
+                FieldSchema(
+                    name="soft_name",
+                    dtype=DataType.VARCHAR,
+                    max_length=512,
+                ),
+                FieldSchema(
+                    name="url",
+                    dtype=DataType.VARCHAR,
+                    max_length=1024,
                 ),
             ]
             
@@ -704,8 +813,13 @@ def _ensure_milvus_collection():
     
     return collection
 
-def add_milvus(all_embedding_element_id):
-    """将数据添加到 Milvus 向量数据库"""
+def add_milvus(all_embedding_element_id, soft_name):
+    """将数据添加到 Milvus 向量数据库
+    
+    Args:
+        all_embedding_element_id: Neo4j 节点 element_id 列表
+        soft_name: 上传的文件名
+    """
     if not milvus_connected:
         print("错误: Milvus 未连接，无法插入数据")
         return
@@ -754,6 +868,8 @@ def add_milvus(all_embedding_element_id):
     code_datas = []
     descriptions = []
     embeddings = []
+    soft_names = []  # 新增：文件名列表
+    urls = []  # 新增：URL列表（暂时为空）
     
     for record in all_records:
         try:
@@ -784,6 +900,8 @@ def add_milvus(all_embedding_element_id):
             code_datas.append(code_data)
             descriptions.append(description or "")
             embeddings.append(embedding)
+            soft_names.append(soft_name)  # 每个chunk都对应同一个文件名
+            urls.append("")  # url暂时为空
             
         except Exception as e:
             error_count += 1
@@ -796,8 +914,8 @@ def add_milvus(all_embedding_element_id):
     # 批量插入数据
     if neo4j_ids:
         try:
-            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
-            entities = [neo4j_ids, code_datas, descriptions, embeddings]
+            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding, soft_name, url
+            entities = [neo4j_ids, code_datas, descriptions, embeddings, soft_names, urls]
             print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
             result = collection.upsert(entities)
             print(f"Upsert 返回结果: {result}")
@@ -904,8 +1022,11 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     add_document_tec_rel(source_name)
     print(f"{file_name} 文章-技术关系建立完成")
     
-    # 增加 milvus
-    add_milvus(all_chunk_element_id)
+    # 构造原始文件名（从 source_name 和 file_type）
+    original_file_name = f"{source_name}.{file_type}"
+    
+    # 增加 milvus，传递文件名
+    add_milvus(all_chunk_element_id, original_file_name)
     print(f"{file_name} milvus 添加完成")
     
     return {"status": "success"}

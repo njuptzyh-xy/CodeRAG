@@ -28,7 +28,7 @@ This is the file directory tree for this project
   ```json
   {{
       "summary": "不超过300字的中文项目摘要",
-    "files": [File 1, File 2, File 3]  # 输出文件相对于项目的路径
+      "files": [File 1, File 2, File 3]  # 输出文件相对于项目的路径
 }}
 ```
 Note: You only need to return json, you don't need to output anything else

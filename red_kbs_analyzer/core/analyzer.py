@@ -766,7 +766,7 @@ class ProjectAnalyzer:
                 try:
                     asyncio.set_event_loop(loop)
                     # 添加超时机制，避免无限等待（30分钟）
-                    timeout_seconds = 30 * 60
+                    timeout_seconds = 20 * 60
                     result = loop.run_until_complete(
                         asyncio.wait_for(
                             analyze_file_technique_with_claude(
