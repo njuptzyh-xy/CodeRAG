@@ -95,3 +95,10 @@ else:
         "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
         "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
     ]
+
+
+# Gitea 配置
+GITEA_URL = os.getenv('GITEA_URL', 'http://10.1.1.155:3000')
+GITEA_ADMIN_USER = os.getenv('GITEA_ADMIN_USER', 'root')
+GITEA_ADMIN_PASSWORD = os.getenv('GITEA_ADMIN_PASSWORD', 'Admin@1234')
+GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')

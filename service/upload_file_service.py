@@ -5,6 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import re
 import requests
 from datetime import datetime
 from openai import OpenAI
@@ -20,16 +21,37 @@ from pymilvus import (
     utility,
 )
 from pymilvus.exceptions import MilvusException
-from setting import (CHAT_MAX_TOKENS, CHAT_MODEL_API_KEY, CHAT_MODEL_NAME, CHAT_URL, DOWNLOAD_FILE_CHUNK_URL, EMBEDDING_URL, 
-                     OCR_URL, UPLOAD_FILE_CHUNK_URL, NEO4J_USER, NEO4J_PASSWORD, NEO4J_URI, NEO4J_DATABASE, EMBEDDING_API_KEY,
-                     MILVUS_HOST, MILVUS_PORT, MILVUS_USER, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION, MILVUS_CONSISTENCY_LEVEL, MILVUS_SECURE)
+from setting import (
+    CHAT_MAX_TOKENS,
+    CHAT_MODEL_API_KEY,
+    CHAT_MODEL_NAME,
+    CHAT_URL,
+    DOWNLOAD_FILE_CHUNK_URL,
+    EMBEDDING_URL,
+    OCR_URL,
+    UPLOAD_FILE_CHUNK_URL,
+    NEO4J_USER,
+    NEO4J_PASSWORD,
+    NEO4J_URI,
+    NEO4J_DATABASE,
+    EMBEDDING_API_KEY,
+    MILVUS_HOST,
+    MILVUS_PORT,
+    MILVUS_USER,
+    MILVUS_PASSWORD,
+    MILVUS_DB_NAME,
+    MILVUS_COLLECTION,
+    MILVUS_CONSISTENCY_LEVEL,
+    MILVUS_SECURE,
+)
 from utils.map_prompt import ANALYZE_FILE_TECHNIQUE_PROMPT
+from gitea_service.gitea_helper import upload_file_to_gitea
 
 # 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
 # 原代码（等磁盘空间足够后改回）：
 # UPLOAD_FILE_DIR = 'upload_file'  # 相对于项目根目录
 # 临时路径
-UPLOAD_FILE_DIR = '/root/workspace/ch/upload_file'
+UPLOAD_FILE_DIR = "upload_file"
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 
@@ -53,15 +75,18 @@ try:
     print(f"Milvus 连接成功: {MILVUS_HOST}:{MILVUS_PORT}")
 except Exception as e:
     print(f"Milvus 连接失败: {e}")
-    print(f"连接参数: host={MILVUS_HOST}, port={MILVUS_PORT}, user={MILVUS_USER}, db={MILVUS_DB_NAME}")
+    print(
+        f"连接参数: host={MILVUS_HOST}, port={MILVUS_PORT}, user={MILVUS_USER}, db={MILVUS_DB_NAME}"
+    )
 
 # 创建一个全局的 Session 对象
 session = requests.Session()
 
 # 可以在这里为 Session 对象配置适配器，例如设置连接池大小
 adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
 
 def submit_task_to_parse(file_path, file_type):
     # 进行提交切分操作
@@ -70,11 +95,15 @@ def submit_task_to_parse(file_path, file_type):
     with open(file_path, "rb") as f:
         file_name = os.path.basename(file_path)
         files = {
-            "file": (os.path.basename(file_path), f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            "file": (
+                os.path.basename(file_path),
+                f,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
         }
         data = {
             "file_type": file_type,
-            "metadata": '{"chunk_size": 2048,"chunk_overlap": 512}'
+            "metadata": '{"chunk_size": 2048,"chunk_overlap": 512}',
         }
         response = session.post(submit_url, files=files, data=data)
         if response.status_code == 200:
@@ -95,6 +124,7 @@ def submit_task_to_parse(file_path, file_type):
 
     return {"status": "success", "task_id": task_id, "message": message}
 
+
 def download_file_data(task_id, file_name):
     download_url = DOWNLOAD_FILE_CHUNK_URL + str(task_id)
     response = session.get(download_url)
@@ -107,13 +137,17 @@ def download_file_data(task_id, file_name):
                 with open(result_file_path, "w", encoding="utf-8") as f:
                     json.dump(response_data, f, ensure_ascii=False, indent=2)
             return {"status": "SUCCESS", "file_name": new_file_name}
-        elif response_data["status"] == "PENDING" or response_data["status"] == "PROCESSING":
+        elif (
+            response_data["status"] == "PENDING"
+            or response_data["status"] == "PROCESSING"
+        ):
             return {"status": "PROCESSING"}
         elif response_data["status"] == "FAILED":
             error_info = response_data["error_info"]
             return {"status": "FAILED", "error_info": error_info}
     else:
         return {"status": "FAILED", "error_info": {}}
+
 
 def judge_data_about_safe(response_data):
     user_prompt = f"""
@@ -130,30 +164,30 @@ def judge_data_about_safe(response_data):
 
         注意:只返回json数据
     """
-    
+
     client = OpenAI(
         api_key=CHAT_MODEL_API_KEY,
         base_url=CHAT_URL,
     )
-    
-    messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
-    
+
+    messages = [
+        {"role": "user", "content": user_prompt},
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+
     response = client.chat.completions.create(
         model=CHAT_MODEL_NAME,
         messages=messages,
-        response_format={
-            'type': 'json_object'
-        },
+        response_format={"type": "json_object"},
         temperature=0,
-        stream=False
+        stream=False,
     )
     return json.loads(response.choices[0].message.content)
 
+
 def get_picture_data_by_ocr(picture_data):
     ocr_url = OCR_URL
-    payload = {
-        "base64_str": picture_data
-    }
+    payload = {"base64_str": picture_data}
     response = session.post(ocr_url, json=payload)
     if response.status_code == 200:
         response_data = response.json().get("ocr_result")
@@ -161,7 +195,11 @@ def get_picture_data_by_ocr(picture_data):
         # 使用模型判断是否是安全相关的知识或者代码、命令行命令相关的数据
         safe_sign = judge_data_about_safe(response_data)
         safe_sign = safe_sign.get("sign")
-        return {"status": "success", "safe_sign": safe_sign, "response_data": response_data}
+        return {
+            "status": "success",
+            "safe_sign": safe_sign,
+            "response_data": response_data,
+        }
     else:
         # 获取非200状态码的响应信息
         try:
@@ -182,7 +220,7 @@ def handle_picture_in_json_file(chunk_json_file_path):
     file_data_chunk = file_data.get("chunks_list")
     if not file_data_chunk:
         return {"status": "error", "message": "没有发现文件内容"}
-    
+
     for chunk_index, chunk in enumerate(file_data_chunk):
         if chunk.get("metadata", {}).get("chunk_type") == "image":
             picture_data = chunk.get("content")
@@ -190,7 +228,7 @@ def handle_picture_in_json_file(chunk_json_file_path):
                 picture_data = get_picture_data_by_ocr(picture_data)
                 picture_sign = picture_data["safe_sign"]
                 reponse_result = picture_data["response_data"]
-                response_status = picture_data["status"]    
+                response_status = picture_data["status"]
                 if picture_sign and response_status == "success":
                     chunk["safe_sign"] = 1
                     if reponse_result:
@@ -204,19 +242,25 @@ def handle_picture_in_json_file(chunk_json_file_path):
         json.dump(file_data, f, ensure_ascii=False, indent=2)
         return {"status": "success"}
 
+
 def delete_image_sign(path):
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
     chunks_list = data.get("chunks_list", [])
     # 过滤掉 chunk_type 为 image 且 safe_sign 为 0 的 chunk
     new_chunks_list = [
-        chunk for chunk in chunks_list
-        if not (chunk.get("metadata", {}).get("chunk_type") == "image" and chunk.get("safe_sign") == 0)
+        chunk
+        for chunk in chunks_list
+        if not (
+            chunk.get("metadata", {}).get("chunk_type") == "image"
+            and chunk.get("safe_sign") == 0
+        )
     ]
     data["chunks_list"] = new_chunks_list
     # 写回文件
     with open(path, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
+
 
 def get_all_documents_text(path, file_name):
     # 进行文件分析
@@ -234,8 +278,9 @@ def get_all_documents_text(path, file_name):
     save_path = os.path.join(UPLOAD_FILE_DIR, new_file_name)
     with open(save_path, "w", encoding="utf-8") as f:
         f.write(file_text)
-    
+
     return save_path, new_file_name
+
 
 def get_summary_for_document(document_text):
     user_prompt = f"""
@@ -253,41 +298,43 @@ def get_summary_for_document(document_text):
 
         注意:只返回json数据
     """
-    
+
     client = OpenAI(
         api_key=CHAT_MODEL_API_KEY,
         base_url=CHAT_URL,
     )
-    
-    messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
-    
+
+    messages = [
+        {"role": "user", "content": user_prompt},
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+
     response = client.chat.completions.create(
         model=CHAT_MODEL_NAME,
         messages=messages,
-        response_format={
-            'type': 'json_object'
-        },
+        response_format={"type": "json_object"},
         temperature=0,
-        stream=False
+        stream=False,
     )
     return json.loads(response.choices[0].message.content)
 
+
 def get_all_documents_summary(path):
     with open(path, "r", encoding="utf-8") as f:
-        file_data = f.read()    
+        file_data = f.read()
 
     # 分段总结
     file_part = []
     max_length = CHAT_MAX_TOKENS
     for i in range(0, len(file_data), max_length):
-        file_part.append(file_data[i: i + max_length])
-    
+        file_part.append(file_data[i : i + max_length])
+
     # 现在给每一段 part 做总结之后，在给所有的分总结一个总结
-    part_summaries = []        # 这是分段总结结果列表
+    part_summaries = []  # 这是分段总结结果列表
     for part_item in file_part:
         summary = get_summary_for_document(part_item)
-        part_summaries.append(summary['summary']) # 假设返回字典里有'summary'字段
-    
+        part_summaries.append(summary["summary"])  # 假设返回字典里有'summary'字段
+
     # 2. 汇总所有分段摘要
     all_summaries = "\n".join(part_summaries)
     final_summary = get_summary_for_document(all_summaries)
@@ -296,38 +343,44 @@ def get_all_documents_summary(path):
     else:
         return "error"
 
+
 def map_document_technical_request(document_text):
     user_prompt = ANALYZE_FILE_TECHNIQUE_PROMPT.format(ducument_text=document_text)
-    
+
     client = OpenAI(
         api_key=CHAT_MODEL_API_KEY,
         base_url=CHAT_URL,
     )
-    
-    messages = [{"role": "user", "content": user_prompt}, {"role": "system", "content": "You are a helpful assistant."}]
-    
+
+    messages = [
+        {"role": "user", "content": user_prompt},
+        {"role": "system", "content": "You are a helpful assistant."},
+    ]
+
     response = client.chat.completions.create(
         model=CHAT_MODEL_NAME,
         messages=messages,
-        response_format={
-            'type': 'json_object'
-        },
+        response_format={"type": "json_object"},
         temperature=0,
-        stream=False
+        stream=False,
     )
     return json.loads(response.choices[0].message.content)
-        
+
+
 def map_document_to_technical(path):
     with open(path, "r", encoding="utf-8") as f:
         document_text = f.read()
     try:
         max_length = CHAT_MAX_TOKENS  # 可根据实际模型 token 限制调整
-        parts = [document_text[i:i+max_length] for i in range(0, len(document_text), max_length)]
+        parts = [
+            document_text[i : i + max_length]
+            for i in range(0, len(document_text), max_length)
+        ]
         part_results = []
         for part in parts:
             result = map_document_technical_request(part)
             part_results.append(result)
-        
+
         # 汇总所有分段的技术点描述
         total_technique_ids = []
         for item in part_results:
@@ -337,25 +390,33 @@ def map_document_to_technical(path):
                     for ttp in item_ttps:
                         if ttp["relevance"] >= 0.9 and ttp["have_text"]:
                             total_technique_ids.append(ttp["technique_id"])
-        
+
         # 需要返回这个技术信息
         return {"data": total_technique_ids, "status": "success"}
     except Exception as e:
         return {"data": str(e), "status": "error"}
 
-def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text, document_insert_number=0):
+
+def insert_neo4j_document_data_without_embedding(
+    technique_ids,
+    source_name,
+    chunk_json_file_name,
+    file_name_txt,
+    summary_text,
+    document_insert_number=0,
+):
     document_path = os.path.join(UPLOAD_FILE_DIR, file_name_txt)
     with open(document_path, "r", encoding="utf-8") as f:
         # 文章正文
         document_full_text = f.read()
-        
+
     document_summary_data = summary_text
-        
+
     # 插入批次，这是用户自己上传，所以设定一个比较特殊的数字
     document_insert_number = 0
-        
+
     document_insert_type = "user_upload_article"
-                        
+
     document_source_info = "userUpload-{}".format(source_name)
     with driver.session(**SESSION_KWARGS) as session:
         # 插入节点
@@ -379,11 +440,12 @@ def insert_neo4j_document_data_without_embedding(technique_ids, source_name, chu
             document_insert_type=document_insert_type,
             document_tec_data_list=technique_ids,
             document_source_info=document_source_info,
-            source_name=source_name
+            source_name=source_name,
         )
         document_element_id = result.single()["element_id"]
-        
+
         # print("看看 documengt_id\n", document_element_id)
+
 
 def get_embhedding(chunk_description):
     headers = {
@@ -400,11 +462,14 @@ def get_embhedding(chunk_description):
                 return embeddings[0]
             print(f"[get_embhedding] Stella 返回为空")
             return None
-        print(f"[get_embhedding] Stella 请求失败 status={response.status_code}, body={response.text}")
+        print(
+            f"[get_embhedding] Stella 请求失败 status={response.status_code}, body={response.text}"
+        )
         return None
     except Exception as e:
         print(f"[get_embhedding] Stella 请求异常: {e}")
         return None
+
 
 def insert_neo4j_chunk(chunk_json_file_name, source_name):
     chunk_file_path = os.path.join(UPLOAD_FILE_DIR, chunk_json_file_name)
@@ -412,7 +477,7 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
         # 文章 chunk 数据
         total_chunk_data_json = json.load(f)
     chunks_list = total_chunk_data_json.get("chunks_list")
-    
+
     all_chunk_element_id = []
     for chunk_item in chunks_list:
         chunk_description = chunk_item.get("content")
@@ -427,7 +492,7 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
 
         chunk_insert_number = 0
         chunk_insert_type = "user_upload_article_chunk"
-            
+
         chunk_source_info = "userUpload-{}".format(source_name)
         with driver.session(**SESSION_KWARGS) as session:
             # 插入节点
@@ -451,12 +516,13 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
                 chunk_id=chunk_id,
                 chunk_insert_number=chunk_insert_number,
                 chunk_insert_type=chunk_insert_type,
-                chunk_source_info=chunk_source_info
+                chunk_source_info=chunk_source_info,
             )
             chunk_element_id = result.single()["chunk_element_id"]
             all_chunk_element_id.append(chunk_element_id)
     return all_chunk_element_id
-            
+
+
 def add_document_chunk_rel(source_name):
     source_info = "userUpload-{}".format(source_name)
     with driver.session(**SESSION_KWARGS) as session:
@@ -482,6 +548,7 @@ def add_document_chunk_rel(source_name):
             session.run(rel_cypher, chunk_id=chunk_id, source_info=source_info)
             print(f"已建立关系: chunk_id={chunk_id}, source_info={source_info}")
             index += 1
+
 
 def add_document_tec_rel(source_name):
     source_info = "userUpload-{}".format(source_name)
@@ -510,24 +577,27 @@ def add_document_tec_rel(source_name):
                 """
                 session.run(rel_cypher, doc_id=doc_id, attack_id=attack_id)
 
+
 def _ensure_milvus_collection():
     """确保 Milvus collection 存在，如果不存在则创建"""
     if not milvus_connected:
         raise RuntimeError("Milvus 未连接，无法创建 collection")
-    
+
     collection_name = MILVUS_COLLECTION
     vector_dim = 1024  # 根据用户要求，向量维度为 1024
-    
+
     # 检查 collection 是否存在
     try:
         has_collection = utility.has_collection(collection_name)
     except Exception as e:
         print(f"检查 collection 是否存在时出错: {e}")
         raise
-    
+
     if not has_collection:
-        print(f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})...")
-        
+        print(
+            f"Milvus collection {collection_name} 不存在，开始创建 (dim={vector_dim})..."
+        )
+
         try:
             # 定义字段：code_data + description + code__embedding
             fields = [
@@ -567,8 +637,18 @@ def _ensure_milvus_collection():
                     name="sparse_vector",
                     dtype=DataType.SPARSE_FLOAT_VECTOR,
                 ),
+                FieldSchema(
+                    name="soft_name",
+                    dtype=DataType.VARCHAR,
+                    max_length=512,
+                ),
+                 FieldSchema(
+                    name="url",
+                    dtype=DataType.VARCHAR,
+                    max_length=1024,
+                ),
             ]
-            
+
             # 创建 BM25 函数，将 description 转为稀疏向量
             bm25_function = Function(
                 name="description_bm25",
@@ -576,14 +656,14 @@ def _ensure_milvus_collection():
                 output_field_names=["sparse_vector"],
                 function_type=FunctionType.BM25,
             )
-            
+
             # 创建 schema
             schema = CollectionSchema(
                 fields=fields,
                 functions=[bm25_function],
                 description="Collection for storing document chunks with embeddings",
             )
-            
+
             # 创建 collection
             collection = Collection(
                 name=collection_name,
@@ -591,7 +671,7 @@ def _ensure_milvus_collection():
                 consistency_level=MILVUS_CONSISTENCY_LEVEL,
             )
             print(f"Collection {collection_name} 创建成功")
-            
+
             # 创建索引
             try:
                 # 为稠密向量创建索引
@@ -604,10 +684,13 @@ def _ensure_milvus_collection():
                 )
                 print(f"为 collection {collection_name} 的向量字段创建索引完成")
             except MilvusException as exc:
-                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                if (
+                    "already exist" not in str(exc).lower()
+                    and "duplicate" not in str(exc).lower()
+                ):
                     print(f"创建向量字段索引时出错: {exc}")
                     raise
-            
+
             try:
                 # 为稀疏向量创建索引
                 collection.create_index(
@@ -619,23 +702,29 @@ def _ensure_milvus_collection():
                 )
                 print(f"为 collection {collection_name} 的稀疏向量字段创建索引完成")
             except MilvusException as exc:
-                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                if (
+                    "already exist" not in str(exc).lower()
+                    and "duplicate" not in str(exc).lower()
+                ):
                     print(f"创建稀疏向量字段索引时出错: {exc}")
                     raise
-            
+
             # 加载 collection
             collection.load()
             print(f"Milvus collection {collection_name} 创建并加载完成")
-            
+
             # 验证 collection 是否真的存在
             if utility.has_collection(collection_name):
                 print(f"✓ 验证成功: collection {collection_name} 已存在")
             else:
-                raise RuntimeError(f"Collection {collection_name} 创建失败，验证时不存在")
-                
+                raise RuntimeError(
+                    f"Collection {collection_name} 创建失败，验证时不存在"
+                )
+
         except Exception as e:
             print(f"创建 collection {collection_name} 时出错: {e}")
             import traceback
+
             traceback.print_exc()
             raise
     else:
@@ -646,14 +735,12 @@ def _ensure_milvus_collection():
         except Exception as e:
             print(f"获取 collection 索引信息时出错: {e}")
             index_info = []
-            
+
         vector_has_index = any(
             idx.field_name == "code__embedding" for idx in index_info
         )
-        sparse_has_index = any(
-            idx.field_name == "sparse_vector" for idx in index_info
-        )
-        
+        sparse_has_index = any(idx.field_name == "sparse_vector" for idx in index_info)
+
         # 如果需要创建索引，先释放 collection
         need_reload = False
         if not vector_has_index or not sparse_has_index:
@@ -661,7 +748,7 @@ def _ensure_milvus_collection():
                 collection.release()
             except Exception:
                 pass  # 如果未加载，忽略异常
-        
+
         if not vector_has_index:
             try:
                 collection.create_index(
@@ -674,9 +761,12 @@ def _ensure_milvus_collection():
                 print(f"为 collection {collection_name} 的向量字段创建索引完成")
                 need_reload = True
             except MilvusException as exc:
-                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                if (
+                    "already exist" not in str(exc).lower()
+                    and "duplicate" not in str(exc).lower()
+                ):
                     print(f"创建向量字段索引时出错: {exc}")
-        
+
         if not sparse_has_index:
             try:
                 collection.create_index(
@@ -689,9 +779,12 @@ def _ensure_milvus_collection():
                 print(f"为 collection {collection_name} 的稀疏向量字段创建索引完成")
                 need_reload = True
             except MilvusException as exc:
-                if "already exist" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                if (
+                    "already exist" not in str(exc).lower()
+                    and "duplicate" not in str(exc).lower()
+                ):
                     print(f"创建稀疏向量字段索引时出错: {exc}")
-        
+
         # 确保 collection 已加载
         if need_reload:
             collection.load()
@@ -701,15 +794,16 @@ def _ensure_milvus_collection():
             except Exception:
                 pass  # 如果已经加载，忽略异常
         print(f"Milvus collection {collection_name} 已存在")
-    
+
     return collection
 
-def add_milvus(all_embedding_element_id):
+
+def add_milvus(all_embedding_element_id, repo_url=""):
     """将数据添加到 Milvus 向量数据库"""
     if not milvus_connected:
         print("错误: Milvus 未连接，无法插入数据")
         return
-    
+
     # 查询指定 ID 的节点，使用 description 作为 code_data 写入 Milvus
     query = """
     UNWIND $element_ids AS element_id
@@ -720,7 +814,7 @@ def add_milvus(all_embedding_element_id):
            n.description as code_data,
            n.description_embedding as code_embedding
     """
-    
+
     try:
         with driver.session(**SESSION_KWARGS) as session:
             result = session.run(query, element_ids=all_embedding_element_id)
@@ -728,85 +822,92 @@ def add_milvus(all_embedding_element_id):
     except Exception as e:
         print(f"从 Neo4j 查询数据失败: {e}")
         import traceback
+
         traceback.print_exc()
         return
-    
+
     if not all_records:
         print("没有找到需要导入的记录")
         return
-    
+
     print(f"从 Neo4j 查询到 {len(all_records)} 条记录")
-    
+
     # 确保 collection 存在
     try:
         collection = _ensure_milvus_collection()
     except Exception as e:
         print(f"确保 collection 存在时出错: {e}")
         import traceback
+
         traceback.print_exc()
         return
-    
+
     success_count = 0
     error_count = 0
-    
+
     # 准备批量插入的数据
     neo4j_ids = []
     code_datas = []
     descriptions = []
     embeddings = []
-    
+
     for record in all_records:
         try:
             neo4j_id = str(record["element_id"])
             description = record["description"]
             code_data = record["code_data"]
             embedding = record["code_embedding"]
-            
+
             # 验证数据
             if not neo4j_id or not code_data or not embedding:
                 error_count += 1
                 print(f"跳过记录 {neo4j_id}: 数据不完整")
                 continue
-            
+
             # 验证向量维度
             if not isinstance(embedding, list):
                 error_count += 1
                 print(f"跳过记录 {neo4j_id}: 向量不是列表类型")
                 continue
-                
+
             actual_dim = len(embedding)
             if actual_dim != 1024:
                 error_count += 1
-                print(f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 1024, 实际 {actual_dim})")
+                print(
+                    f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 1024, 实际 {actual_dim})"
+                )
                 continue
-            
+
             neo4j_ids.append(neo4j_id)
             code_datas.append(code_data)
             descriptions.append(description or "")
             embeddings.append(embedding)
-            
+
         except Exception as e:
             error_count += 1
             print(f"处理记录失败: {str(e)}")
             import traceback
+
             traceback.print_exc()
-    
+
     print(f"准备插入 {len(neo4j_ids)} 条有效记录")
-    
+
     # 批量插入数据
     if neo4j_ids:
         try:
-            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding
-            entities = [neo4j_ids, code_datas, descriptions, embeddings]
+            repo_urls = [repo_url] * len(neo4j_ids)
+            soft_names = [""] * len(neo4j_ids)
+            # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding, soft_name, url
+            entities = [neo4j_ids, code_datas, descriptions, embeddings, soft_names, repo_urls]
             print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
             result = collection.upsert(entities)
             print(f"Upsert 返回结果: {result}")
             success_count = len(neo4j_ids)
-            
+
             # 每100条打印一次进度
             if success_count % 100 == 0:
                 print(f"已成功导入{success_count}条记录...")
-            
+
             # 验证插入是否成功 - 查询 collection 中的记录数
             try:
                 collection.flush()  # 确保数据被持久化
@@ -814,32 +915,35 @@ def add_milvus(all_embedding_element_id):
                 print(f"Collection {MILVUS_COLLECTION} 当前包含 {num_entities} 条记录")
             except Exception as e:
                 print(f"查询 collection 记录数时出错: {e}")
-            
+
             print(f"导入完成！成功: {success_count}, 失败: {error_count}")
         except MilvusException as e:
             print(f"Milvus 批量插入失败: {str(e)}")
             print(f"错误类型: {type(e).__name__}")
             import traceback
+
             traceback.print_exc()
             error_count += len(neo4j_ids)
         except Exception as e:
             print(f"插入数据时发生未知错误: {str(e)}")
             print(f"错误类型: {type(e).__name__}")
             import traceback
+
             traceback.print_exc()
             error_count += len(neo4j_ids)
     else:
         print("没有有效数据需要导入")
+
 
 def handle_file(source_name, file_path, file_name, file_type, document_insert_number=0):
     # 提交切分
     task_id_and_message_data = submit_task_to_parse(file_path, file_type)
     if task_id_and_message_data["status"] == "error":
         return task_id_and_message_data
-    
+
     task_id = task_id_and_message_data["task_id"]
     task_message = task_id_and_message_data["message"]
-    
+
     # 轮询任务状态
     chunk_json_file_name = None
     is_sign = True
@@ -857,11 +961,11 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
             error_info = status["error_info"]
             print(f"{file_name} 文件切分失败，错误信息: {error_info}")
             break
-    
+
     # 先判断是不是失败了
     if not is_sign:
         return {"status": "error", "message": error_info}
-    
+
     # 处理文件中的图片，有和安全有关的替换成文字
     chunk_json_file_path = os.path.join(UPLOAD_FILE_DIR, chunk_json_file_name)
     status = handle_picture_in_json_file(chunk_json_file_path)
@@ -873,10 +977,12 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     # 将文件中的和安全无关的图片删掉
     delete_image_sign(chunk_json_file_path)
     print(f"{file_name} 无关图片删除完成")
-    
+
     # 将整个 json 组合成一个 txt 文件 解析json文本块和图片ocr后的内容串起来
-    save_path, file_name_txt = get_all_documents_text(chunk_json_file_path, chunk_json_file_name)
-    
+    save_path, file_name_txt = get_all_documents_text(
+        chunk_json_file_path, chunk_json_file_name
+    )
+
     # 获得文章总结
     summary_text = get_all_documents_summary(save_path)
     if summary_text == "error":
@@ -891,7 +997,14 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     print(f"{file_name} 技术矩阵对应完成")
 
     # 进行文章插入
-    insert_neo4j_document_data_without_embedding(technique_ids, source_name, chunk_json_file_name, file_name_txt, summary_text, document_insert_number)
+    insert_neo4j_document_data_without_embedding(
+        technique_ids,
+        source_name,
+        chunk_json_file_name,
+        file_name_txt,
+        summary_text,
+        document_insert_number,
+    )
     print(f"{file_name} 文章插入完成")
     # 进行 chunk 插入
     all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name)
@@ -899,18 +1012,54 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     # 增加 文章 chunk 关系
     add_document_chunk_rel(source_name)
     print(f"{file_name} 文章-chunk 关系建立完成")
-    
+
     # 增加文章 技术关系
     add_document_tec_rel(source_name)
     print(f"{file_name} 文章-技术关系建立完成")
-    
+
+    # 上传文件到 Gitea（一个文件一个仓库）
+    try:
+        repo_name = handle_reponame(file_name)
+        print(f"{file_name} Gitea 仓库名称: {repo_name}")
+        repo_url = upload_file_to_gitea(
+            file_path, repo_name, f"Uploaded file: {file_name}"
+        )
+    except Exception as e:
+        print(f"{file_name} Gitea 上传异常: {e}")
+
     # 增加 milvus
-    add_milvus(all_chunk_element_id)
+    if repo_url:
+        print(f"{file_name} Gitea 上传成功，仓库 URL: {repo_url}")
+        add_milvus(all_chunk_element_id, repo_url)
+    else:
+        print(f"{file_name} Gitea 上传失败，将继续处理但不记录仓库 URL")
+        add_milvus(all_chunk_element_id)
     print(f"{file_name} milvus 添加完成")
-    
+
     return {"status": "success"}
-    
-    
+
+
+def handle_reponame(file_name: str) -> str:
+    repo_name_base = os.path.splitext(file_name)[0]
+    # Gitea 仓库名称规范：只能包含小写字母、数字、连字符(-)和下划线(_)
+    # 1. 转换为小写
+    repo_name = repo_name_base.lower()
+    # 2. 替换空格、点为下划线（保留连字符，因为 Gitea 允许）
+    repo_name = repo_name.replace(" ", "_").replace(".", "_")
+    # 3. 移除所有非字母数字字符（除了下划线和连字符）
+    repo_name = re.sub(r"[^a-z0-9_-]", "_", repo_name)
+    # 4. 移除连续的下划线或连字符
+    repo_name = re.sub(r"[_-]+", "_", repo_name)
+    # 5. 移除开头和结尾的下划线或连字符
+    repo_name = repo_name.strip("_-")
+    # 6. 如果为空，使用默认名称
+    if not repo_name:
+        repo_name = "file_" + datetime.now().strftime("%Y%m%d%H%M%S")
+    # 7. 限制长度
+    if len(repo_name) > 100:
+        repo_name = repo_name[:100]
+    return repo_name
+
 def save_file(file):
     # 临时修改：由于磁盘空间不足，将路径改为 /root/workspace/ch 下
     # 原代码（等磁盘空间足够后改回）：
@@ -918,22 +1067,32 @@ def save_file(file):
     # # 确保目录存在
     # if not os.path.exists(upload_file_dir):
     #     os.makedirs(upload_file_dir)
-    
+
     # 临时路径
     upload_file_dir = UPLOAD_FILE_DIR
     # 确保目录存在
     if not os.path.exists(upload_file_dir):
         os.makedirs(upload_file_dir)
-        
+
     file_name = file.filename
-    
+
     # 查看文件类型,除了固定文件类型,其他文件类型都不处理
-    file_type = file_name.split('.')[-1]
-    if file_type not in ['pdf', 'docx', 'doc', 'txt', 'md', 'pptx', 'jpg', 'png', 'xlsx']:
+    file_type = file_name.split(".")[-1]
+    if file_type not in [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "pptx",
+        "jpg",
+        "png",
+        "xlsx",
+    ]:
         raise ValueError(f"不支持的文件类型: {file_type}")
-    
+
     # 生成时间字符串
-    time_str = datetime.now().strftime('%Y%m%d%H%M%S')
+    time_str = datetime.now().strftime("%Y%m%d%H%M%S")
 
     # 拆分文件名和扩展名
     name_part, ext_part = os.path.splitext(file_name)
@@ -941,8 +1100,8 @@ def save_file(file):
     new_file_name = f"{name_part}_{time_str}{ext_part}"
 
     file_path = os.path.join(upload_file_dir, new_file_name)
-    
+
     # 保存到指定目录
     file.save(file_path)
-    
+
     return name_part, file_path, new_file_name, file_type
