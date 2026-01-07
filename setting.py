@@ -14,9 +14,9 @@ EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "huaqing-embedding-key-9b677e
 # EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
 
 # Chat 模型设置
-CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
-CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-6584e56ad0ac47e58a222b1cc6b01627")
+CHAT_URL = os.getenv('CHAT_URL', "https://dashscope.aliyuncs.com/compatible-mode/v1")
+CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-v3")
+CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-53102f66e8284a5885f1114bb15cc868")
 CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
 CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 
@@ -95,6 +95,10 @@ else:
         "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
         "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
     ]
+
+# ====== Claude Code 项目路径配置 ==================
+PROJECT_ROOT = os.path.abspath(os.getenv('CLAUDE_PROJECT_ROOT', "/root/workspace/ch"))
+UPLOAD_CODE_DIR = os.path.join(PROJECT_ROOT, "upload_code")
 
 
 # Gitea 配置

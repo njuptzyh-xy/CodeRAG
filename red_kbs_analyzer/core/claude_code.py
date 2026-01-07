@@ -13,7 +13,7 @@ from .key_pool import ClaudeKeyPool
 
 # 导入配置
 try:
-    from setting import CLAUDE_API_KEYS
+    from setting import CLAUDE_API_KEYS, PROJECT_ROOT, UPLOAD_CODE_DIR
 except ImportError:
     # 如果无法导入，使用默认值
     CLAUDE_API_KEYS = [
@@ -21,13 +21,11 @@ except ImportError:
         "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
         "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
     ]
+    PROJECT_ROOT = os.path.abspath("/root/workspace/ch")
+    UPLOAD_CODE_DIR = os.path.join(PROJECT_ROOT, "upload_code")
 
 # 创建全局号池实例
 key_pool = ClaudeKeyPool(CLAUDE_API_KEYS)
-
-
-PROJECT_ROOT = os.path.abspath("/root/workspace/ch")
-UPLOAD_CODE_DIR = os.path.join(PROJECT_ROOT, "upload_code")
 MAX_FILES = 5
 
 # Token 限制配置（粗略估算：1 token ≈ 4 字符，保留安全余量）
@@ -86,13 +84,14 @@ async def _call_with_key_pool(func: Callable[[str], Awaitable[Any]]) -> Any:
             is_token_error = (
                 "maximum context length" in error_msg.lower() or
                 "context length" in error_msg.lower() or
-                "131072" in error_msg
+                "131072" in error_msg or
+                "token limit exceeded" in error_msg.lower()
             )
             
             should_retry = not is_token_error and attempt < max_retries - 1
             
             if should_retry:
-                logger.warning(f"[Claude Code] Key 失败，尝试下一个 key: {error_msg[:100]}")
+                logger.warning(f"[Claude Code] Key {attempt + 1}/{max_retries} 失败，尝试下一个 key: {error_msg[:100]}")
                 continue
             else:
                 # 不应该重试的错误或最后一次尝试，直接抛出
@@ -265,13 +264,11 @@ async def generate_project_summary_with_claude(project: RedTool, processed_files
             print()  # 换行
             logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
 
-        # 检测 AUP 拒绝情况（保留作为双重检查）
+        # 检测 AUP 拒绝情况 - 抛出异常以触发 key 轮换
         if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，响应内容前500字符: {full_response[:500]}")
-            return {
-                "summary": "",
-                "files": []
-            }
+            error_msg = f"AUP rejection detected: {full_response[:300]}"
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，抛出异常以触发 key 轮换")
+            raise RuntimeError(error_msg)
 
         # 解析 JSON
         logger.info(f"[Claude Code] 开始解析 JSON 响应...")
@@ -495,10 +492,11 @@ async def identify_main_files_with_claude(project: RedTool, processed_files: Lis
                         break
             print()  # 换行
             
-        # 检测 AUP 拒绝情况（保留作为双重检查）
+        # 检测 AUP 拒绝情况 - 抛出异常以触发 key 轮换
         if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，返回空文件列表")
-            return []
+            error_msg = f"AUP rejection detected: {full_response[:300]}"
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，抛出异常以触发 key 轮换")
+            raise RuntimeError(error_msg)
 
         # 解析 JSON
         json_str = None
@@ -625,12 +623,9 @@ async def analyze_file_technique_with_claude(
                 if "maximum context length" in error_msg.lower() or "context length" in error_msg.lower() or "131072" in error_msg:
                     logger.error(f"[Claude Code] Token 限制错误: {error_msg}")
                     logger.error(f"[Claude Code] Prompt 长度: {len(prompt)} 字符")
-                    return {
-                        "result": False,
-                        "ttps": [],
-                        "status": "failed",
-                        "error": "Token limit exceeded"
-                    }
+                    # 抛出异常，让 _call_with_key_pool 识别并跳过重试
+                    raise ValueError(f"Token limit exceeded: {error_msg}")
+                # 其他异常直接抛出，触发 key 轮换
                 raise
             
             logger.info(f"[Claude Code] 开始接收 Claude 响应消息...")
@@ -666,15 +661,11 @@ async def analyze_file_technique_with_claude(
             print()  # 换行
             logger.info(f"[Claude Code] 完成接收消息，共接收 {message_count} 条消息，总响应长度: {len(full_response)} 字符")
         
-        # 检测 AUP 拒绝情况
+        # 检测 AUP 拒绝情况 - 抛出异常以触发 key 轮换
         if found_aup_error or any(keyword.lower() in full_response.lower() for keyword in aup_keywords):
-            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应")
-            return {
-                "result": False,
-                "ttps": [],
-                "status": "failed",
-                "error": "AUP rejection"
-            }
+            error_msg = f"AUP rejection detected: {full_response[:300]}"
+            logger.warning(f"[Claude Code] 检测到 AUP 拒绝响应，抛出异常以触发 key 轮换")
+            raise RuntimeError(error_msg)
     
         # 解析 JSON
         logger.info(f"[Claude Code] 开始解析 JSON 响应...")
@@ -712,35 +703,24 @@ async def analyze_file_technique_with_claude(
                             json_str = full_response[brace_start:brace_end + 1]
                             logger.info(f"[Claude Code] 使用第三种模式提取到 JSON，位置: {brace_start}-{brace_end}，长度: {len(json_str)} 字符")
         
+        # JSON 未找到 - 抛出异常以触发 key 轮换
         if not json_str:
-            logger.warning(f"[Claude Code] 未找到 JSON 格式的响应，响应内容前500字符: {full_response[:500]}")
-            return {
-                "result": False,
-                "ttps": [],
-                "status": "failed",
-                "error": "No JSON found"
-            }
+            error_msg = f"No JSON found in response. Response preview: {full_response[:500]}"
+            logger.warning(f"[Claude Code] 未找到 JSON 格式的响应，抛出异常以触发 key 轮换")
+            raise ValueError(error_msg)
         
         logger.info(f"[Claude Code] 开始解析 JSON 字符串...")
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            logger.error(f"[Claude Code] JSON 解析失败: {e}，json_str 前 500 字符: {json_str[:500]}")
-            return {
-                "result": False,
-                "ttps": [],
-                "status": "failed",
-                "error": f"JSON decode error: {e}"
-            }
+            error_msg = f"JSON decode error: {e}. JSON preview: {json_str[:500]}"
+            logger.error(f"[Claude Code] JSON 解析失败，抛出异常以触发 key 轮换: {error_msg}")
+            raise ValueError(error_msg)
         
         if not isinstance(data, dict):
-            logger.error(f"[Claude Code] JSON 根节点不是对象类型，实际类型: {type(data)}")
-            return {
-                "result": False,
-                "ttps": [],
-                "status": "failed",
-                "error": "Invalid JSON structure"
-            }
+            error_msg = f"Invalid JSON structure: root is not a dict, got {type(data)}"
+            logger.error(f"[Claude Code] JSON 根节点不是对象类型，抛出异常以触发 key 轮换: {error_msg}")
+            raise ValueError(error_msg)
         
         result = data.get("result", False)
         ttps = data.get("ttps", [])
