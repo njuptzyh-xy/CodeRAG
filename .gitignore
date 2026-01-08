@@ -29,3 +29,7 @@ neo4j_to_milvus.py
 update_softname_in_milvus.py
 verify_batch.py
 gitea_service/
+1upload_ots_files_log.txt
+batch_upload_ots_files.py
+move_success_files.py
+upload_ots_files_log.txt
