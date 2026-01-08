@@ -26,6 +26,8 @@ prompts_dict = {
             查询：{}
             只输出两种类型之一，不加解释。
             输出 json 格式 {{"retrieval_strategy": "hybrid_search" | "vector_expansion"}}
+            【输出示例】
+            {{"retrieval_strategy": "hybrid_search"}}
         """
         # "judge_prompt": """
         #     根据查询特性选择最佳检索方式：

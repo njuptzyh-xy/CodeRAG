@@ -94,7 +94,16 @@ class RetrievalRoute:
                 temperature=self.model_temperature,
                 response_format={"type": "json_object"}
             )
-            response_data = json.loads(response.choices[0].message.content)
+            # 处理可能包含 markdown 代码块的响应
+            content = response.choices[0].message.content
+            # 提取 JSON 内容：找到第一个 { 和最后一个 } 之间的内容
+            start_idx = content.find('{')
+            end_idx = content.rfind('}')
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_str = content[start_idx:end_idx + 1]
+                response_data = json.loads(json_str)
+            else:
+                raise ValueError(f"无法从响应中提取有效的 JSON: {content}")
         else:
             response = client.chat.completions.create(
                 model=self.model_name,
@@ -192,7 +201,7 @@ class RetrievalRoute:
         if len(es_data) > 0:
             # 进行重排模型重排
             # print("es_data=================\n", es_data)
-            neo4j_description_list = [es_data_item.get("source").get("description") for es_data_item in es_data]
+            neo4j_description_list = [es_data_item.get("source").get("code_data") for es_data_item in es_data]
             # print("neo4j_description_list=================\n", neo4j_description_list)
             rank_index_result_list = self.send_rerank_request(neo4j_description_list, top_k=3)
             
