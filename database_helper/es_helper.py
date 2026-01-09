@@ -183,6 +183,8 @@ class ESHelper:
             if isinstance(fields, dict):
                 if fields.get("description") is not None:
                     payload["description"] = fields.get("description", "")
+                if fields.get("code_data") is not None:
+                    payload["code_data"] = fields.get("code_data", "")
                 payload.setdefault("neo4j_id", fields.get("neo4j_id", ""))
 
             # 调试查看最终返回的 payload

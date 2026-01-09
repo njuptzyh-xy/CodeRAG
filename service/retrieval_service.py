@@ -114,14 +114,14 @@ class RetrievalRoute:
         
         return response_data
     
-    def send_rerank_request(self, documents: list[str], top_k: int):
+    def send_rerank_request(self, code_data_list: list[str], top_k: int):
         # 发送重排请求
         """
         调用重排序接口对文档进行排序
         
         参数:
             query: 查询文本
-            documents: 待排序的文档列表
+            code_data_list: 待排序的文档列表
             top_k: 返回排序后的前 k 个结果
         
         返回:
@@ -133,11 +133,11 @@ class RetrievalRoute:
         }
         
         # print("=================\n", self.question)
-        # print("=================\n", documents)
+        # print("=================\n", docode_data_listcuments)
         # print("=================\n", top_k)
         payload = {
             "query": self.question,
-            "documents": documents,
+            "documents": code_data_list,
             "top_k": top_k
         }
         
@@ -201,9 +201,9 @@ class RetrievalRoute:
         if len(es_data) > 0:
             # 进行重排模型重排
             # print("es_data=================\n", es_data)
-            neo4j_description_list = [es_data_item.get("source").get("code_data") for es_data_item in es_data]
-            # print("neo4j_description_list=================\n", neo4j_description_list)
-            rank_index_result_list = self.send_rerank_request(neo4j_description_list, top_k=3)
+            neo4j_code_data_list = [es_data_item.get("source").get("code_data") for es_data_item in es_data]
+            # print("neo4j_code_data_list=================\n", neo4j_code_data_list)
+            rank_index_result_list = self.send_rerank_request(neo4j_code_data_list, top_k=3)
             
             # 重排结果进行梳理，将这几个结点 id 进行整理
             neo4j_id_list = []

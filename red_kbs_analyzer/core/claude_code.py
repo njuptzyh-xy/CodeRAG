@@ -21,8 +21,7 @@ except ImportError:
         "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
         "935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3",
     ]
-    PROJECT_ROOT = os.path.abspath("/root/workspace/ch")
-    UPLOAD_CODE_DIR = os.path.join(PROJECT_ROOT, "upload_code")
+    
 
 # 创建全局号池实例
 key_pool = ClaudeKeyPool(CLAUDE_API_KEYS)

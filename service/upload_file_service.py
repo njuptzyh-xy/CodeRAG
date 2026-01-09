@@ -331,6 +331,8 @@ def get_summary_for_document(document_text):
         
         总结文章内容在 2000 字左右。
         
+        仅输出 JSON，不要添加任何解释、前后缀、Markdown 代码块。
+        不要出现反斜杠转义错误，字符串内如需反斜杠请写成 \\\\。
         严格按照以下格式返回 json 数据:
         {{
             "summary": "总结的内容"
