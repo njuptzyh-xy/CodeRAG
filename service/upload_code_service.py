@@ -176,6 +176,7 @@ def save_file_and_extract(file):
     file.save(file_path)
 
     # 进行文件解压
+    extract_dir = ""
     if file_type in ["tar", "tar.gz"]:
         extract_dir = extract_tar_file(file_path)
     elif file_type == "zip":

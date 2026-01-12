@@ -64,6 +64,7 @@ class Neo4jHelper:
         
         # 构建动态返回字段
         field_expressions = []
+        return_clause = ""
         if return_fields != "all":
             for field in return_fields:
                 # 安全处理字段名，避免注入
