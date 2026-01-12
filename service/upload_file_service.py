@@ -501,6 +501,7 @@ def insert_neo4j_document_data_without_embedding(
     file_name_txt,
     summary_text,
     document_insert_number=0,
+    repo_url=""
 ):
     document_path = os.path.join(UPLOAD_FILE_DIR, file_name_txt)
     with open(document_path, "r", encoding="utf-8") as f:
@@ -526,7 +527,8 @@ def insert_neo4j_document_data_without_embedding(
                 n.insert_type = $document_insert_type,
                 n.mitre_attack_id_list = $document_tec_data_list,
                 n.source_info = $document_source_info,
-                n.title = $source_name
+                n.title = $source_name,
+                n.repo_url = $repo_url
             RETURN elementId(n) as element_id
         """
         result = session.run(
@@ -538,6 +540,7 @@ def insert_neo4j_document_data_without_embedding(
             document_tec_data_list=technique_ids,
             document_source_info=document_source_info,
             source_name=source_name,
+            repo_url=repo_url,
         )
         document_element_id = result.single()["element_id"]
 
@@ -568,7 +571,7 @@ def get_embhedding(chunk_description):
         return None
 
 
-def insert_neo4j_chunk(chunk_json_file_name, source_name):
+def insert_neo4j_chunk(chunk_json_file_name, source_name,repo_url):
     chunk_file_path = os.path.join(UPLOAD_FILE_DIR, chunk_json_file_name)
     with open(chunk_file_path, "r", encoding="utf-8") as f:
         # 文章 chunk 数据
@@ -602,7 +605,8 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
                     n.chunk_id = $chunk_id,
                     n.insert_number = $chunk_insert_number,
                     n.insert_type = $chunk_insert_type,
-                    n.source_info = $chunk_source_info
+                    n.source_info = $chunk_source_info,
+                    n.repo_url = $repo_url
                 RETURN elementId(n) as chunk_element_id
             """
             result = session.run(
@@ -614,6 +618,7 @@ def insert_neo4j_chunk(chunk_json_file_name, source_name):
                 chunk_insert_number=chunk_insert_number,
                 chunk_insert_type=chunk_insert_type,
                 chunk_source_info=chunk_source_info,
+                repo_url=repo_url,
             )
             chunk_element_id = result.single()["chunk_element_id"]
             all_chunk_element_id.append(chunk_element_id)
@@ -1093,26 +1098,6 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     technique_ids = technical_dict["data"]
     print(f"{file_name} 技术矩阵对应完成")
 
-    # 进行文章插入
-    insert_neo4j_document_data_without_embedding(
-        technique_ids,
-        source_name,
-        chunk_json_file_name,
-        file_name_txt,
-        summary_text,
-        document_insert_number,
-    )
-    print(f"{file_name} 文章插入完成")
-    # 进行 chunk 插入
-    all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name)
-    print(f"{file_name} chunk 插入完成")
-    # 增加 文章 chunk 关系
-    add_document_chunk_rel(source_name)
-    print(f"{file_name} 文章-chunk 关系建立完成")
-
-    # 增加文章 技术关系
-    add_document_tec_rel(source_name)
-    print(f"{file_name} 文章-技术关系建立完成")
 
     # 上传文件到 Gitea（一个文件一个仓库）
     try:
@@ -1123,6 +1108,29 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
         )
     except Exception as e:
         print(f"{file_name} Gitea 上传异常: {e}")
+        return {"status": "error", "message": str(e)}
+
+    # 进行文章插入
+    insert_neo4j_document_data_without_embedding(
+        technique_ids,
+        source_name,
+        chunk_json_file_name,
+        file_name_txt,
+        summary_text,
+        document_insert_number,
+        repo_url
+    )
+    print(f"{file_name} 文章插入完成")
+    # 进行 chunk 插入
+    all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name,repo_url)
+    print(f"{file_name} chunk 插入完成")
+    # 增加 文章 chunk 关系
+    add_document_chunk_rel(source_name)
+    print(f"{file_name} 文章-chunk 关系建立完成")
+
+    # 增加文章 技术关系
+    add_document_tec_rel(source_name)
+    print(f"{file_name} 文章-技术关系建立完成")
 
     # 增加 milvus
     if repo_url:

@@ -272,7 +272,7 @@ def generate_code_chunk_description(code_data, file_name=None):
         return None
 
 
-def handle_json_file(data, insert_number):
+def handle_json_file(data, insert_number,repo_url):
     behind_uuid = str(uuid.uuid4())
     software_uuid = f"software-{behind_uuid}"
     behind_file_uuid = "file-{}-{}"
@@ -312,7 +312,8 @@ def handle_json_file(data, insert_number):
             software.software_uuid = $software_uuid,
             software.description = $software_description,
             software.tactic_id_list = $tactic_id_list,
-            software.insert_number = $insert_number
+            software.insert_number = $insert_number,
+            software.repo_url = $repo_url
         RETURN elementId(software) AS software_element_id
         """
         result = session.run(
@@ -322,6 +323,7 @@ def handle_json_file(data, insert_number):
             software_description=software_description,
             tactic_id_list=tactics_id_list2,
             insert_number=insert_number,
+            repo_url=repo_url,
         )
         software_element_id = result.single()["software_element_id"]
     logger.info(
@@ -354,7 +356,8 @@ def handle_json_file(data, insert_number):
                     file.name = $file_name,
                     file.software_uuid = $software_uuid,
                     file.insert_number = $insert_number,
-                    file.file_uuid = $file_uuid
+                    file.file_uuid = $file_uuid,
+                    file.repo_url = $repo_url
                 RETURN file
                 """
                 session.run(
@@ -363,6 +366,7 @@ def handle_json_file(data, insert_number):
                     file_name=file_name,
                     software_uuid=software_uuid,
                     insert_number=insert_number,
+                    repo_url=repo_url,
                 )
             logger.info(f"[handle_json_file] 文件节点 MERGE 完成 uuid={file_uuid}")
             index += 1
@@ -568,7 +572,8 @@ def handle_json_file(data, insert_number):
                     code.chunk_end_line = chunk.chunk_end_line,
                     code.have_code = chunk.have_code,
                     code.relevance = chunk.relevance,
-                    code.code_embedding = chunk.code_embedding
+                    code.code_embedding = chunk.code_embedding,
+                    code.repo_url = $repo_url
                 RETURN elementId(code) as chunk_element_id, chunk.code_uuid as code_uuid
                 """
 
@@ -596,6 +601,7 @@ def handle_json_file(data, insert_number):
                     chunks=chunks_data,
                     file_uuid=file_uuid,
                     insert_number=insert_number,
+                    repo_url=repo_url,
                 )
 
                 # 创建 code_uuid -> elementId 的映射，用于同步到 all_chunks_data
@@ -1409,16 +1415,7 @@ def handle_code(source_name, file_path, file_name, file_type, extract_dir, inser
             # 任务1：分析代码，处理 JSON 文件和建立关系（串行执行）
             def process_code_data():
                 result = analysis_code(extract_dir, source_name)
-                try:
-                    logger.info(f"[handle_code] 开始处理代码数据: {source_name}")
-                    all_file_ids, software_uuid, all_embedding_element_id, all_chunks_for_milvus = handle_json_file(result.to_dict(), insert_number)
-                    # 建立关系（只针对 Neo4j 中的代码块）
-                    add_relateship(all_file_ids, software_uuid, insert_number)
-                    logger.info(f"[handle_code] 代码数据处理完成: {source_name}")
-                    return all_chunks_for_milvus
-                except Exception as e:
-                    logger.error(f"[handle_code] 代码数据处理异常: {e}")
-                    raise
+                return result
             
             # 任务2：上传到 Gitea（并发执行）
             def upload_to_gitea_task():
@@ -1439,14 +1436,19 @@ def handle_code(source_name, file_path, file_name, file_type, extract_dir, inser
                     return ""  # 上传失败返回空字符串，不影响主流程
             
             # 提交并发任务
-            future_code = executor.submit(process_code_data)
+            future_result = executor.submit(process_code_data)
             future_gitea = executor.submit(upload_to_gitea_task)
             
             # 等待两个任务完成
-            all_chunks_for_milvus = future_code.result()
+            result = future_result.result()
             repo_url = future_gitea.result()
+        logger.info(f"[handle_code] 开始处理代码数据: {source_name}")
+        all_file_ids, software_uuid, all_embedding_element_id, all_chunks_for_milvus = handle_json_file(result.to_dict(), insert_number,repo_url)
+        # 建立关系（只针对 Neo4j 中的代码块）
+        add_relateship(all_file_ids, software_uuid, insert_number)
+        logger.info(f"[handle_code] 代码数据处理完成: {source_name}")
         add_milvus_from_chunks(all_chunks_for_milvus, repo_url=repo_url)
-
         return {"status": "success"}
+        
     except Exception as e:
         return {"status": "error", "message": str(e)}

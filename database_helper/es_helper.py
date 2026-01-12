@@ -35,7 +35,7 @@ class ESHelper:
         self.collection = self._init_collection()
         
         # 直接设置需要返回的字段：neo4j_id、code_data、description
-        self.output_fields = ["neo4j_id", "code_data", "description"]
+        self.output_fields = ["neo4j_id", "code_data", "description","url"]
 
     def _init_collection(self) -> Optional[Collection]:
         """连接并加载指定的 Milvus collection。"""
@@ -185,6 +185,8 @@ class ESHelper:
                     payload["description"] = fields.get("description", "")
                 if fields.get("code_data") is not None:
                     payload["code_data"] = fields.get("code_data", "")
+                if fields.get("url") is not None:
+                    payload["url"] = fields.get("url", "")
                 payload.setdefault("neo4j_id", fields.get("neo4j_id", ""))
 
             # 调试查看最终返回的 payload

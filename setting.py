@@ -58,11 +58,11 @@ ES_ALPHA = float(os.getenv('ES_ALPHA', 0.6))
 
 # 图谱查询的节点字段
 NODE_RETURN_FIELDS = {
-    "MitreAttackArticleChunk": ["description", "source_url"],
-    "MitreAttackArticleDocument": ["insert_type", "procedure_examples_id", "procedure_examples_name", "source_url", "title"],
+    "MitreAttackArticleChunk": ["description", "source_url","repo_url"],
+    "MitreAttackArticleDocument": ["insert_type", "procedure_examples_id", "procedure_examples_name", "source_url", "title","repo_url"],
     "MitreAttackCampaign": ["description", "attack_id", "attack_first_seen_citation", "attack_last_seen_citation", "name", "ref_url"],
-    "MitreAttackCodeSoftware": ["description", "name"],
-    "MitreAttackCodeSoftwareCodeChunk": ["description", "technique_id", "code_data"],
+    "MitreAttackCodeSoftware": ["description", "name","repo_url"],
+    "MitreAttackCodeSoftwareCodeChunk": ["description", "technique_id", "code_data","repo_url"],
     "MitreAttackDataComponent": ["description", "name"],
     "MitreAttackDataSource": ["attack_id", "description", "name", "ref_url"],
     "MitreAttackGroup": ["attack_id", "description", "name", "ref_url"],

@@ -10,7 +10,7 @@ driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
 
 def get_description_by_id(mitre_attack_id):
     query = f"""
-    MATCH (n:BaseEntity)
+    MATCH (n:MitreAttackTactic)
     WHERE n.attack_id = "{mitre_attack_id}"
     RETURN n.description as description
     """
