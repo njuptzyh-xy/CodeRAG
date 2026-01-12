@@ -1,16 +1,66 @@
 import os
+import re
 import sys
 import subprocess
 import requests
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
-
+from neo4j import GraphDatabase
+from pymilvus import (
+    connections,
+    Collection,
+    CollectionSchema,
+    FieldSchema,
+    DataType,
+    Function,
+    FunctionType,
+    utility,
+)
+from pymilvus.exceptions import MilvusException
+from setting import (
+    NEO4J_PASSWORD,
+    NEO4J_URI,
+    NEO4J_USER,
+    NEO4J_DATABASE,
+    MILVUS_HOST,
+    MILVUS_PORT,
+    MILVUS_USER,
+    MILVUS_PASSWORD,
+    MILVUS_DB_NAME,
+    MILVUS_COLLECTION,
+    MILVUS_CONSISTENCY_LEVEL,
+    MILVUS_SECURE,
+)
 
 # Gitea 配置
 GITEA_URL = os.getenv('GITEA_URL', 'http://10.1.1.155:3000')
 GITEA_ADMIN_USER = os.getenv('GITEA_ADMIN_USER', 'root')
 GITEA_ADMIN_PASSWORD = os.getenv('GITEA_ADMIN_PASSWORD', 'Admin@1234')
 GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')
+
+AUTH = (NEO4J_USER, NEO4J_PASSWORD)
+SESSION_KWARGS = {"database": NEO4J_DATABASE}
+driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
+
+# 连接 Milvus - 改进错误处理
+milvus_connected = False
+try:
+    connections.connect(
+        alias="default",
+        host=MILVUS_HOST,
+        port=str(MILVUS_PORT),
+        user=MILVUS_USER,
+        password=MILVUS_PASSWORD,
+        db_name=MILVUS_DB_NAME,
+        secure=MILVUS_SECURE,
+    )
+    milvus_connected = True
+    print(f"Milvus 连接成功: {MILVUS_HOST}:{MILVUS_PORT}")
+except Exception as e:
+    print(f"Milvus 连接失败: {e}")
+    print(
+        f"连接参数: host={MILVUS_HOST}, port={MILVUS_PORT}, user={MILVUS_USER}, db={MILVUS_DB_NAME}"
+    )
 
 
 class GiteaService:
@@ -286,7 +336,7 @@ def upload_folder_to_gitea(
     org_name: Optional[str] = None,
     description: str = "",
     service: Optional[GiteaService] = None
-) -> bool:
+) -> Optional[str]:
     """
     将文件夹内容上传到 Gitea 仓库
 
@@ -425,7 +475,9 @@ def upload_folder_to_gitea(
         os.chdir(original_cwd)
 
         print(f"[OK] 文件夹内容已成功上传到 Gitea 仓库")
-        return True
+        if not repo_info.get("html_url"):
+            return False
+        return repo_info.get("html_url")
 
     except subprocess.CalledProcessError as e:
         print(f"[FAIL] Git 操作失败: {e.stderr.decode() if e.stderr else str(e)}")
@@ -441,6 +493,200 @@ def upload_folder_to_gitea(
         except:
             pass
         return False
+
+def update_repo_url(repo_url: str, software_name: str) -> List[str]:
+    """
+    更新仓库的 URL 到 Neo4j 图数据库中的相关节点
+
+    Args:
+        repo_url: 仓库的 URL（html_url）
+        software_name: 软件名称，用于查询对应的节点
+
+    Returns:
+        成功返回 MitreAttackCodeSoftwareCodeChunk 节点的 elementId 列表，失败返回空列表
+    """
+    try:
+        from database_helper.neo4j_helper import Neo4jHelper
+
+        # 初始化 Neo4j 连接
+        neo4j_helper = Neo4jHelper()
+        code_chunk_element_ids = []
+
+        # 查询软件节点及其关联的文件和代码块
+        query = """
+        MATCH (software:MitreAttackCodeSoftware)
+        WHERE software.name = $software_name
+        OPTIONAL MATCH (software)-[r1:CODE_SOFTWARE_HAS_CODE_SOFTWARE_FILE]->(file:MitreAttackCodeSoftwareFile)
+        OPTIONAL MATCH (file)-[r3:CODE_SOFTWARE_FILE_HAS_CODE_SOFTWARE_CODE_CHUNK]->(code:MitreAttackCodeSoftwareCodeChunk)
+        RETURN software, file, code
+        """
+
+        with neo4j_helper.neo4j_driver.session(**neo4j_helper.session_kwargs) as session:
+            result = session.run(query, software_name=software_name)
+
+            # 收集所有需要更新的节点
+            software_node = None
+            file_nodes = []
+            code_nodes = []
+
+            for record in result:
+                # 处理 software 节点
+                if record.get("software"):
+                    software_node = record["software"]
+
+                # 处理 file 节点
+                if record.get("file"):
+                    file_nodes.append(record["file"])
+
+                # 处理 code 节点
+                if record.get("code"):
+                    code_nodes.append(record["code"])
+
+            # 更新 software 节点的 repo_url
+            if software_node:
+                session.run(
+                    "MATCH (n:MitreAttackCodeSoftware) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    element_id=software_node.element_id, repo_url=repo_url
+                )
+                print(f"[INFO] 更新 Software 节点 repo_url: {software_node.element_id}")
+
+            # 去重 file_nodes
+            seen_file_elements = set()
+            unique_file_nodes = []
+            for file_node in file_nodes:
+                if file_node.element_id not in seen_file_elements:
+                    seen_file_elements.add(file_node.element_id)
+                    unique_file_nodes.append(file_node)
+
+            # 更新 file 节点的 repo_url
+            for file_node in unique_file_nodes:
+                session.run(
+                    "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    element_id=file_node.element_id, repo_url=repo_url
+                )
+                print(f"[INFO] 更新 File 节点 repo_url: {file_node.element_id}")
+
+            # 去重 code_nodes 并收集 element_id
+            seen_code_elements = set()
+            unique_code_nodes = []
+            for code_node in code_nodes:
+                if code_node.element_id not in seen_code_elements:
+                    seen_code_elements.add(code_node.element_id)
+                    unique_code_nodes.append(code_node)
+                    code_chunk_element_ids.append(code_node.element_id)
+
+            # 更新 code 节点的 repo_url
+            for code_node in unique_code_nodes:
+                session.run(
+                    "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    element_id=code_node.element_id, repo_url=repo_url
+                )
+                print(f"[INFO] 更新 CodeChunk 节点 repo_url: {code_node.element_id}")
+
+            print(f"[OK] 成功更新 {len(unique_file_nodes)} 个 File 节点和 {len(unique_code_nodes)} 个 CodeChunk 节点的 repo_url")
+            return code_chunk_element_ids
+
+    except Exception as e:
+        print(f"[FAIL] 更新仓库 URL 失败: {e}")
+        return []
+
+def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str, repo_url: str) -> bool:
+    """
+    根据 Neo4j 的 CodeChunk element_id 更新 Milvus 中对应记录的 soft_name 和 url
+
+    Args:
+        code_chunk_element_ids: Neo4j 中 MitreAttackCodeSoftwareCodeChunk 节点的 element_id 列表
+        softname: 软件名称,将更新到 Milvus 的 soft_name 字段
+        repo_url: 仓库 URL,将更新到 Milvus 的 url 字段
+
+    Returns:
+        成功返回 True,失败返回 False
+    """
+    if not milvus_connected:
+        print("[FAIL] Milvus 未连接,无法更新数据")
+        return False
+
+    if not code_chunk_element_ids:
+        print("[WARN] 没有提供 code_chunk_element_ids")
+        return False
+
+    try:
+        # 获取 collection
+        if not utility.has_collection(MILVUS_COLLECTION):
+            print(f"[FAIL] Collection {MILVUS_COLLECTION} 不存在")
+            return False
+
+        collection = Collection(MILVUS_COLLECTION)
+        collection.load()
+
+        print(f"[INFO] 开始为 {len(code_chunk_element_ids)} 个代码块更新 Milvus 记录")
+        print(f"       soft_name: {softname}")
+        print(f"       repo_url: {repo_url}")
+
+        # 步骤1: 只查询 neo4j_id 来验证记录存在
+        try:
+            expr_ids = ", ".join([f'"{eid}"' for eid in code_chunk_element_ids])
+            result = collection.query(
+                expr=f"neo4j_id in [{expr_ids}]",
+                output_fields=["*"]
+            )
+
+            if not result:
+                print(f"[WARN] 在 Milvus 中没有找到匹配的记录,跳过更新")
+                return False
+
+            matched_ids = [item["neo4j_id"] for item in result]
+            print(f"[INFO] 在 Milvus 中找到 {len(matched_ids)} 条匹配记录")
+
+        except Exception as e:
+            print(f"[FAIL] 查询 Milvus 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        # 步骤3: 批量更新 - 只修改 soft_name 和 url,其他字段保持原值
+        success_count = 0
+        BATCH_SIZE = 100
+
+        for i in range(0, len(result), BATCH_SIZE):
+            batch_data = result[i:i + BATCH_SIZE]
+
+            # 提取所有字段,只修改 soft_name 和 url
+            batch_neo4j_ids = [item["neo4j_id"] for item in batch_data]
+            batch_code_data = [item["code_data"] for item in batch_data]
+            batch_descriptions = [item["description"] for item in batch_data]
+            batch_embeddings = [item["code__embedding"] for item in batch_data]
+            batch_soft_names = [softname] * len(batch_data)  # 更新为新值
+            batch_urls = [repo_url] * len(batch_data)  # 更新为新值
+
+            try:
+                # upsert 必须提供所有字段,但我们只修改 soft_name 和 url
+                collection.upsert(
+                    data=[
+                        batch_neo4j_ids,      # 主键
+                        batch_code_data,      # 保持原值
+                        batch_descriptions,   # 保持原值
+                        batch_embeddings,     # 保持原值
+                        batch_soft_names,     # ✨ 更新
+                        batch_urls,           # ✨ 更新
+                    ]
+                )
+                success_count += len(batch_neo4j_ids)
+                print(f"[OK] 已更新 {success_count}/{len(result)} 条记录")
+
+            except Exception as e:
+                print(f"[FAIL] 批量更新失败 (批次 {i//BATCH_SIZE + 1}): {e}")
+                continue
+
+        print(f"[OK] Milvus 更新完成,成功更新 {success_count} 条记录")
+        return success_count > 0
+
+    except Exception as e:
+        print(f"[FAIL] 更新 Milvus 时发生异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
 
 
 def batch_upload_folders(
@@ -492,21 +738,41 @@ def batch_upload_folders(
         print("-" * 80)
 
         description = f"{description_template} - {folder_name}"
-        success = upload_folder_to_gitea(
+        repo_url = upload_folder_to_gitea(
             folder_path=folder_path,
             repo_name=folder_name,
             org_name=org_name,
             description=description,
             service=service
         )
+        if not repo_url:
+            print(f"[FAIL] 上传失败: {folder_name}")
+            continue
+        code_chunk_element_ids = update_repo_url(repo_url, folder_name)
+        if not code_chunk_element_ids:
+            print(f"[FAIL] 更新仓库 URL 失败: {folder_name}")
+            continue
 
-        results[folder_path] = success
-        if success:
+        # 更新 Milvus 中的 soft_name 和 url
+        print(f"[INFO] 开始更新 Milvus 记录...")
+        milvus_updated = add_milvus_from_code_chunk(
+            code_chunk_element_ids=code_chunk_element_ids,
+            softname=folder_name,
+            repo_url=repo_url
+        )
+        if not milvus_updated:
+            print(f"[WARN] Milvus 更新失败或没有匹配记录: {folder_name}")
+            continue
+        else:
+            print(f"[OK] Milvus 更新成功: {folder_name}")
+
+        results[folder_path] = repo_url
+        if repo_url:
             success_count += 1
         else:
             fail_count += 1
 
-        print(f"[{'OK' if success else 'FAIL'}] {folder_name}: {'成功' if success else '失败'}")
+        print(f"[{'OK' if repo_url else 'FAIL'}] {folder_name}: {'成功' if repo_url else '失败'}")
 
     # 打印总结
     print("\n" + "=" * 80)
@@ -525,6 +791,7 @@ def batch_upload_folders(
 
 
 def main():
+    #pyton batch_upload_projects.py /TestProject
     """命令行入口"""
     if len(sys.argv) < 2:
         print("用法: python batch_upload_projects.py <base_path> [--org <org_name>] [--desc <description>]")
