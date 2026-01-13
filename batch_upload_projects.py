@@ -1,10 +1,16 @@
 import os
 import re
+import shutil
 import sys
 import subprocess
+
+import time
+import uuid
 import requests
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
+from datetime import datetime
+import stat
 from neo4j import GraphDatabase
 from pymilvus import (
     connections,
@@ -328,6 +334,221 @@ def get_subfolders(base_path: str) -> List[str]:
     except Exception as e:
         print(f"[FAIL] 扫描文件夹失败: {e}")
         return []
+
+def handle_reponame(file_name: str) -> str:
+    repo_name_base = os.path.splitext(file_name)[0]
+    # Gitea 仓库名称规范：只能包含小写字母、数字、连字符(-)和下划线(_)
+    # 1. 转换为小写
+    repo_name = repo_name_base.lower()
+    # 2. 替换空格、点为下划线（保留连字符，因为 Gitea 允许）
+    repo_name = repo_name.replace(" ", "_").replace(".", "_")
+    # 3. 移除所有非字母数字字符（除了下划线和连字符）
+    repo_name = re.sub(r"[^a-z0-9_-]", "_", repo_name)
+    # 4. 移除连续的下划线或连字符
+    repo_name = re.sub(r"[_-]+", "_", repo_name)
+    # 5. 移除开头和结尾的下划线或连字符
+    repo_name = repo_name.strip("_-")
+    # 6. 如果为空，使用默认名称
+    if not repo_name:
+        repo_name = "file_" + datetime.now().strftime("%Y%m%d%H%M%S")
+    # 7. 限制长度
+    if len(repo_name) > 100:
+        repo_name = repo_name[:100]
+    return repo_name
+
+def upload_file_to_gitea(
+    file_path: str, repo_name: str, description: str = "", service: Optional[GiteaService] = None
+) -> Optional[str]:
+    """
+    将单个文件上传到 Gitea 并返回仓库的 web_url
+    一个文件对应一个仓库
+
+    Args:
+        file_path: 要上传的文件路径
+        repo_name: 仓库名称
+        description: 仓库描述
+
+    Returns:
+        成功返回仓库的 web_url，失败返回 None
+    """
+    try:
+        file_path = os.path.abspath(file_path)
+        if not os.path.exists(file_path):
+            print(f"[FAIL] [upload_file_to_gitea] 文件不存在: {file_path}")
+            return None
+
+        if not os.path.isfile(file_path):
+            print(f"[FAIL] [upload_file_to_gitea] 路径不是文件: {file_path}")
+            return None
+
+        if service is None:
+            service = GiteaService(
+                base_url=GITEA_URL,
+                username=GITEA_ADMIN_USER,
+                password=GITEA_ADMIN_PASSWORD
+            )
+
+            if not service.authenticate():
+                print("[FAIL] [upload_file_to_gitea] 认证失败")
+                return None
+        # 确保组织存在
+        if not service.ensure_org_exists(GITEA_ORG_NAME):
+            print(f"[FAIL] [upload_file_to_gitea] 无法确保组织存在: {GITEA_ORG_NAME}")
+            return None
+
+        # 创建仓库
+        repo_info = service.create_repo(
+            repo_name=repo_name,
+            description=description,
+            private=False,
+            auto_init=False,
+            org_name=GITEA_ORG_NAME,
+        )
+
+        if not repo_info:
+            print("[FAIL] [upload_file_to_gitea] 无法创建或获取仓库")
+            return None
+
+        # 获取克隆 URL（带认证信息）
+        clone_url = service.get_repo_clone_url(repo_info)
+        if not clone_url:
+            print("[FAIL] [upload_file_to_gitea] 无法获取仓库克隆 URL")
+            return None
+
+        print(f"[INFO] [upload_file_to_gitea] 开始上传文件到仓库...")
+        print(f"[INFO] [upload_file_to_gitea] 源文件: {file_path}")
+        print(f"[INFO] [upload_file_to_gitea] 仓库: {GITEA_ORG_NAME}/{repo_name}")
+
+        # 在文件所在目录下创建一个唯一的临时目录，用于 git 操作
+        # 使用时间戳 + UUID 确保唯一性，不删除目录（避免 Windows 删除文件占用问题）
+        file_dir = os.path.dirname(file_path)
+        tmp_root = os.path.join(
+            file_dir,
+            f"tmp_gitea_{uuid.uuid4().hex[:8]}",
+        )
+        os.makedirs(tmp_root, exist_ok=True)
+        original_cwd = os.getcwd()
+
+        try:
+            # 复制文件到临时目录
+            file_name = os.path.basename(file_path)
+            dest_file_path = os.path.join(tmp_root, file_name)
+            shutil.copy2(file_path, dest_file_path)
+            print(
+                f"[INFO] [upload_file_to_gitea] 文件已复制到临时目录: {dest_file_path}"
+            )
+
+            # 切换到临时目录
+            os.chdir(tmp_root)
+
+            # 初始化 git 仓库
+            print("[INFO] [upload_file_to_gitea] 初始化 Git 仓库...")
+            subprocess.run(["git", "init"], check=True, capture_output=True)
+
+            # 配置 git 用户信息（避免提交时缺少用户信息）
+            subprocess.run(
+                ["git", "config", "user.name", service.username], capture_output=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", f"{service.username}@gitea.local"],
+                capture_output=True,
+            )
+
+            # 添加文件
+            print("[INFO] [upload_file_to_gitea] 添加文件到 Git...")
+            subprocess.run(["git", "add", file_name], check=True, capture_output=True)
+
+            # 提交
+            print("[INFO] [upload_file_to_gitea] 提交文件...")
+            commit_message = f"Upload file: {file_name}"
+            subprocess.run(
+                ["git", "commit", "-m", commit_message], check=True, capture_output=True
+            )
+
+            # 添加远程仓库
+            print("[INFO] [upload_file_to_gitea] 配置远程仓库...")
+            subprocess.run(["git", "remote", "add", "origin", clone_url], check=True)
+
+            # 推送代码
+            print("[INFO] [upload_file_to_gitea] 推送代码到 Gitea...")
+            # 尝试推送到 main 分支，如果失败则尝试 master
+            try:
+                subprocess.run(
+                    ["git", "push", "-u", "origin", "HEAD:main", "--force"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                print("[INFO] [upload_file_to_gitea] 代码已推送到 main 分支")
+            except subprocess.CalledProcessError:
+                try:
+                    subprocess.run(
+                        ["git", "push", "-u", "origin", "HEAD:master", "--force"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    print("[INFO] [upload_file_to_gitea] 代码已推送到 master 分支")
+                except subprocess.CalledProcessError as e:
+                    print(
+                        f"[FAIL] [upload_file_to_gitea] 推送失败: {e.stderr if e.stderr else e}"
+                    )
+                    return None
+            web_url = repo_info.get("html_url", "")
+            print(f"[OK] [upload_file_to_gitea] 文件已成功上传到 Gitea 仓库")
+            print(f"[INFO] [upload_file_to_gitea] 仓库 Web URL: {web_url}")
+            return web_url
+
+        except subprocess.CalledProcessError as e:
+            print(
+                f"[FAIL] [upload_file_to_gitea] Git 操作失败: {e.stderr.decode() if e.stderr else str(e)}"
+            )
+            try:
+                os.chdir(original_cwd)
+            except:
+                pass
+            return None
+        except Exception as e:
+            print(f"[FAIL] [upload_file_to_gitea] 上传过程异常: {e}")
+            try:
+                os.chdir(original_cwd)
+            except:
+                pass
+            return None
+        finally:
+            # Git push 成功，恢复原始工作目录，并删除相关文件夹
+            os.chdir(original_cwd)
+
+            # 等待一下，确保 Git 进程完全结束
+            time.sleep(0.5)
+
+            # 尝试删除临时目录
+            if os.path.exists(tmp_root):
+                try:
+                    # Windows 删除辅助函数：使文件可写
+                    def make_writable(func, path, exc_info):
+                        """使文件可写，用于处理 Windows 权限问题"""
+                        if os.path.exists(path):
+                            try:
+                                os.chmod(path, stat.S_IWRITE)
+                                func(path)
+                            except Exception:
+                                pass
+
+                    # 尝试删除临时目录
+                    shutil.rmtree(tmp_root, onerror=make_writable)
+                    print(f"[INFO] [upload_file_to_gitea] 临时目录已清理: {tmp_root}")
+                except Exception as e:
+                    # Windows 删除失败很常见（文件被占用），记录警告但不影响主流程
+                    print(
+                        f"[WARN] [upload_file_to_gitea] 临时目录删除失败（Windows 常见问题）: {tmp_root}, "
+                        f"错误: {e}。目录将在后续手动清理或系统重启时自动清理。"
+                    )
+
+    except Exception as e:
+        print(f"[FAIL] [upload_file_to_gitea] 上传失败: {e}")
+        return None
+
 
 
 def upload_folder_to_gitea(
@@ -686,16 +907,188 @@ def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str,
         import traceback
         traceback.print_exc()
         return False
-    
 
 
-def batch_upload_folders(
+def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
+    """
+    更新仓库的 URL 到 Neo4j 图数据库中的文件相关节点（ArticleDocument 和 ArticleChunk）
+
+    Args:
+        repo_url: 仓库的 URL（html_url）
+        document_name: 文档名称（title），用于查询对应的节点
+
+    Returns:
+        成功返回 MitreAttackArticleChunk 节点的 elementId 列表，失败返回空列表
+    """
+    try:
+        from database_helper.neo4j_helper import Neo4jHelper
+
+        # 初始化 Neo4j 连接
+        neo4j_helper = Neo4jHelper()
+        article_chunk_element_ids = []
+
+        # 查询文档节点及其关联的文章块
+        query = """
+        MATCH (document:MitreAttackArticleDocument)
+        WHERE document.title = $document_name
+        OPTIONAL MATCH (document)-[r1:DOCUMENT_HAS_CHUNK]->(chunk:MitreAttackArticleChunk)
+        RETURN document, chunk
+        """
+
+        with neo4j_helper.neo4j_driver.session(**neo4j_helper.session_kwargs) as session:
+            result = session.run(query, document_name=document_name)
+
+            # 收集所有需要更新的节点
+            document_node = None
+            chunk_nodes = []
+
+            for record in result:
+                # 处理 document 节点
+                if record.get("document"):
+                    document_node = record["document"]
+
+                # 处理 chunk 节点
+                if record.get("chunk"):
+                    chunk_nodes.append(record["chunk"])
+
+            # 更新 document 节点的 repo_url
+            if document_node:
+                session.run(
+                    "MATCH (n:MitreAttackArticleDocument) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    element_id=document_node.element_id, repo_url=repo_url
+                )
+                print(f"[INFO] 更新 ArticleDocument 节点 repo_url: {document_node.element_id}")
+
+            # 去重 chunk_nodes 并收集 element_id
+            seen_chunk_elements = set()
+            unique_chunk_nodes = []
+            for chunk_node in chunk_nodes:
+                if chunk_node.element_id not in seen_chunk_elements:
+                    seen_chunk_elements.add(chunk_node.element_id)
+                    unique_chunk_nodes.append(chunk_node)
+                    article_chunk_element_ids.append(chunk_node.element_id)
+
+            # 更新 chunk 节点的 repo_url
+            for chunk_node in unique_chunk_nodes:
+                session.run(
+                    "MATCH (n:MitreAttackArticleChunk) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    element_id=chunk_node.element_id, repo_url=repo_url
+                )
+                print(f"[INFO] 更新 ArticleChunk 节点 repo_url: {chunk_node.element_id}")
+
+            print(f"[OK] 成功更新 {len(unique_chunk_nodes)} 个 ArticleChunk 节点的 repo_url")
+            return article_chunk_element_ids
+
+    except Exception as e:
+        print(f"[FAIL] 更新文件仓库 URL 失败: {e}")
+        return []
+
+
+def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname: str, repo_url: str) -> bool:
+    """
+    根据 Neo4j 的 ArticleChunk element_id 更新 Milvus 中对应记录的 soft_name 和 url
+
+    Args:
+        article_chunk_element_ids: Neo4j 中 MitreAttackArticleChunk 节点的 element_id 列表
+        softname: 软件名称,将更新到 Milvus 的 soft_name 字段
+        repo_url: 仓库 URL,将更新到 Milvus 的 url 字段
+
+    Returns:
+        成功返回 True,失败返回 False
+    """
+    if not milvus_connected:
+        print("[FAIL] Milvus 未连接,无法更新数据")
+        return False
+
+    if not article_chunk_element_ids:
+        print("[WARN] 没有提供 article_chunk_element_ids")
+        return False
+
+    try:
+        # 获取 collection
+        if not utility.has_collection(MILVUS_COLLECTION):
+            print(f"[FAIL] Collection {MILVUS_COLLECTION} 不存在")
+            return False
+
+        collection = Collection(MILVUS_COLLECTION)
+        collection.load()
+
+        print(f"[INFO] 开始为 {len(article_chunk_element_ids)} 个文章块更新 Milvus 记录")
+        print(f"       soft_name: {softname}")
+        print(f"       repo_url: {repo_url}")
+
+        # 步骤1: 只查询 neo4j_id 来验证记录存在
+        try:
+            expr_ids = ", ".join([f'"{eid}"' for eid in article_chunk_element_ids])
+            result = collection.query(
+                expr=f"neo4j_id in [{expr_ids}]",
+                output_fields=["*"]
+            )
+
+            if not result:
+                print(f"[WARN] 在 Milvus 中没有找到匹配的记录,跳过更新")
+                return False
+
+            matched_ids = [item["neo4j_id"] for item in result]
+            print(f"[INFO] 在 Milvus 中找到 {len(matched_ids)} 条匹配记录")
+
+        except Exception as e:
+            print(f"[FAIL] 查询 Milvus 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        # 步骤2: 批量更新 - 只修改 soft_name 和 url,其他字段保持原值
+        success_count = 0
+        BATCH_SIZE = 100
+
+        for i in range(0, len(result), BATCH_SIZE):
+            batch_data = result[i:i + BATCH_SIZE]
+
+            # 提取所有字段,只修改 soft_name 和 url
+            batch_neo4j_ids = [item["neo4j_id"] for item in batch_data]
+            batch_code_data = [item["code_data"] for item in batch_data]
+            batch_descriptions = [item["description"] for item in batch_data]
+            batch_embeddings = [item["code__embedding"] for item in batch_data]
+            batch_soft_names = [softname] * len(batch_data)  # 更新为新值
+            batch_urls = [repo_url] * len(batch_data)  # 更新为新值
+
+            try:
+                # upsert 必须提供所有字段,但我们只修改 soft_name 和 url
+                collection.upsert(
+                    data=[
+                        batch_neo4j_ids,      # 主键
+                        batch_code_data,      # 保持原值
+                        batch_descriptions,   # 保持原值
+                        batch_embeddings,     # 保持原值
+                        batch_soft_names,     # ✨ 更新
+                        batch_urls,           # ✨ 更新
+                    ]
+                )
+                success_count += len(batch_neo4j_ids)
+                print(f"[OK] 已更新 {success_count}/{len(result)} 条记录")
+
+            except Exception as e:
+                print(f"[FAIL] 批量更新失败 (批次 {i//BATCH_SIZE + 1}): {e}")
+                continue
+
+        print(f"[OK] Milvus 更新完成,成功更新 {success_count} 条记录")
+        return success_count > 0
+
+    except Exception as e:
+        print(f"[FAIL] 更新 Milvus 时发生异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def batch_upload_folders_code(
     base_path: str,
     org_name: Optional[str] = None,
     description_template: str = "项目批量上传"
-) -> Dict[str, bool]:
+):
     """
-    批量上传文件夹到 Gitea
+    批量上传代码文件夹到 Gitea（处理 MitreAttackCodeSoftware 相关节点）
 
     Args:
         base_path: 基础路径，包含所有要上传的项目文件夹
@@ -781,13 +1174,126 @@ def batch_upload_folders(
     print(f"成功: {success_count} 个")
     print(f"失败: {fail_count} 个")
 
-    if fail_count > 0:
-        print("\n失败的文件夹:")
-        for folder_path, success in results.items():
-            if not success:
-                print(f"  - {folder_path}")
 
-    return results
+
+def batch_upload_folders_file(
+    base_path: str,
+    org_name: Optional[str] = None,
+    description_template: str = "文件批量上传"
+):
+    """
+    批量上传文件文件夹到 Gitea（处理 MitreAttackArticleDocument 相关节点）
+
+    说明：
+    - 此函数专门处理文件类项目（如 PDF 文档），对应 Neo4j 中的 ArticleDocument 节点
+    - 文件夹名称即为文档的 title，用于匹配 Neo4j 中的 MitreAttackArticleDocument.title
+    - 例如：文件夹 "APP漏洞挖掘之某下载量超101万的APP有几个漏洞可以GetShell？.pdf"
+            对应 ArticleDocument.title 为 "APP漏洞挖掘之某下载量超101万的APP有几个漏洞可以GetShell？"
+
+    Args:
+        base_path: 基础路径，包含所有要上传的文件文件夹（如 PDF 文档文件夹）
+        org_name: 组织名称，如果不提供则使用默认组织
+        description_template: 仓库描述模板
+
+    Returns:
+        返回字典，键为文件夹路径，值为是否成功
+    """
+    # 初始化 Gitea 服务（复用连接）
+    service = GiteaService(
+        base_url=GITEA_URL,
+        username=GITEA_ADMIN_USER,
+        password=GITEA_ADMIN_PASSWORD
+    )
+
+    # 认证
+    if not service.authenticate():
+        print("[FAIL] 认证失败")
+        return {}
+
+    # 获取当前目录下所有条目（文件和文件夹）
+    all_items = os.listdir(base_path)
+
+    # 筛选出文件（排除文件夹）
+    files = [os.path.join(base_path, item) for item in all_items if os.path.isfile(os.path.join(base_path, item))]
+
+    if not files:
+        print(f"[INFO] 在 {base_path} 中没有找到任何子文件")
+        return {}
+
+    print(f"[INFO] 找到 {len(files)} 个文件")
+    print("=" * 80)
+
+    # 批量上传
+    results = {}
+    success_count = 0
+    fail_count = 0
+
+    for i, file_path in enumerate(files, 1):
+        # 获取文件夹名称（可能包含 .pdf 等扩展名）
+        file_name = os.path.basename(file_path)
+
+        # 提取文档标题（去除文件扩展名，如 .pdf）
+        # 例如：APP漏洞挖掘之某下载量超101万的APP有几个漏洞可以GetShell？.pdf
+        #      -> APP漏洞挖掘之某下载量超101万的APP有几个漏洞可以GetShell？
+        document_title = file_name
+        if '.' in file_name:
+            # 保留主文件名，去掉扩展名
+            document_title = file_name.rsplit('.', 1)[0]
+
+        print(f"\n[{i}/{len(files)}] 正在处理文件: {file_name}")
+        print(f"[INFO] 文档标题: {document_title}")
+        print("-" * 80)
+
+        repo_name = handle_reponame(document_title)
+        print(f"[INFO] 仓库名称: {repo_name}")
+
+        # 上传文件文件夹到 Gitea（使用文件夹名称作为仓库名）
+        description = f"{description_template} - {document_title}"
+        repo_url = upload_file_to_gitea(
+            file_path=file_path,
+            repo_name=repo_name,  # 使用原始文件夹名作为仓库名
+            description=description,
+            service=service
+        )
+        if not repo_url:
+            print(f"[FAIL] 上传失败: {file_name}")
+            continue
+
+        # 更新 Neo4j 中 ArticleDocument 和 ArticleChunk 节点的 repo_url
+        # 注意：这里使用 document_title（去掉扩展名）来匹配 ArticleDocument.title
+        article_chunk_element_ids = update_repo_url_for_file(repo_url, document_title)
+        if not article_chunk_element_ids:
+            print(f"[FAIL] 更新文件仓库 URL 失败: {file_name}")
+            print(f"[WARN] 可能原因：Neo4j 中未找到 title='{document_title}' 的 ArticleDocument 节点")
+            continue
+
+        # 更新 Milvus 中的 soft_name 和 url
+        print(f"[INFO] 开始更新 Milvus 记录...")
+        milvus_updated = add_milvus_from_article_chunk(
+            article_chunk_element_ids=article_chunk_element_ids,
+            softname=document_title,  # 使用文档标题作为 soft_name
+            repo_url=repo_url
+        )
+        if not milvus_updated:
+            print(f"[WARN] Milvus 更新失败或没有匹配记录: {file_name}")
+            continue
+        else:
+            print(f"[OK] Milvus 更新成功: {file_name}")
+
+        results[file_path] = repo_url
+        if repo_url:
+            success_count += 1
+        else:
+            fail_count += 1
+
+        print(f"[{'OK' if repo_url else 'FAIL'}] {file_name}: {'成功' if repo_url else '失败'}")
+
+    # 打印总结
+    print("\n" + "=" * 80)
+    print("文件批量上传完成！")
+    print(f"总计: {len(files)} 个文件文件夹")
+    print(f"成功: {success_count} 个")
+    print(f"失败: {fail_count} 个")
 
 
 def main():
@@ -833,22 +1339,17 @@ def main():
     print(f"描述模板: {description_template}")
     print("=" * 80)
 
-    results = batch_upload_folders(
-        base_path=base_path,
+    batch_upload_folders_code(
+        base_path=os.path.join(base_path, "codes"),
         org_name=org_name,
         description_template=description_template
     )
 
-    # 判断是否全部成功
-    if results and all(results.values()):
-        print("\n所有文件夹上传成功！")
-        sys.exit(0)
-    elif results:
-        print(f"\n部分文件夹上传失败！")
-        sys.exit(1)
-    else:
-        print("\n没有文件夹被上传！")
-        sys.exit(1)
+    batch_upload_folders_file(
+        base_path=os.path.join(base_path, "files"),
+        org_name=org_name,
+        description_template=description_template
+    )
 
 
 if __name__ == "__main__":
