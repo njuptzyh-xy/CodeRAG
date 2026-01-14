@@ -174,6 +174,7 @@ def get_software_techniques_tactics_route():
 
     # 执行查询
     data = get_software_techniques_tactics(software_id)
+    
 
     if data['tactics_count'] == 0:
         return jsonify({'code': '200', 'message': '未找到相关战术和技术信息', 'data': data})
