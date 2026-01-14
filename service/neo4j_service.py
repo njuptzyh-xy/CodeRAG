@@ -31,7 +31,7 @@ def get_data_by_id(mitre_attack_id):
     query = f"""
     MATCH (n)-[r]->(article:MitreAttackArticleDocument)
     WHERE n.attack_id = "{mitre_attack_id}"
-    RETURN elementId(article) as document_neo_id, article.title as title, article.article_summary as summary
+    RETURN elementId(article) as document_neo_id, article.title as title, article.article_summary as summary, article.repo_url as repo_url
     """
     with driver.session(**SESSION_KWARGS) as session:
         result = session.run(query)
@@ -39,7 +39,8 @@ def get_data_by_id(mitre_attack_id):
             document_list.append({
                 'document_neo_id': record.get('document_neo_id'),
                 'title': record.get('title'),
-                'summary': record.get('summary')
+                'summary': record.get('summary'),
+                'repo_url': record.get('repo_url')
             })
     
     # 获取软件数据
@@ -66,7 +67,7 @@ def get_data_by_id(mitre_attack_id):
         code_software_query = f"""
         MATCH (software:MitreAttackCodeSoftware)-[r]->(file:MitreAttackCodeSoftwareFile)
         WHERE file.file_uuid = "{file_uuid_item}"
-        RETURN software.name as software_name, software.description as software_description, elementId(software) as software_element_id
+        RETURN software.name as software_name, software.description as software_description, elementId(software) as software_element_id, software.repo_url as repo_url
         """
         with driver.session(**SESSION_KWARGS) as session:
             code_software_result = session.run(code_software_query)
@@ -74,12 +75,14 @@ def get_data_by_id(mitre_attack_id):
                 single_software_name = code_software_record.get("software_name")
                 single_software_description = code_software_record.get("software_description")
                 single_software_neo_id = code_software_record.get("software_element_id")
+                single_software_repo_url = code_software_record.get("repo_url")
                 if single_software_neo_id not in check_id_list:
                     check_id_list.append(single_software_neo_id)
                     software_list.append({
                         "software_neo_id": single_software_neo_id,
                         "software_description": single_software_description,
-                        "software_name": single_software_name
+                        "software_name": single_software_name,
+                        "repo_url": single_software_repo_url
                     })
     result_data = {
         'document': document_list,
@@ -103,6 +106,7 @@ def get_detail_by_ids(neo_ids):
                        article.source_url as source_url,
                        article.insert_type as insert_type,
                        article.mitre_attack_id_list as mitre_attack_id_list,
+                       article.repo_url as repo_url,
                        elementId(article) as article_id
             """
             with driver.session(**SESSION_KWARGS) as session:
@@ -117,6 +121,7 @@ def get_detail_by_ids(neo_ids):
                 item_insert_type = result_data.get('insert_type', '未知')
                 item_attack_ids = result_data.get('mitre_attack_id_list', [])
                 item_article_id = result_data.get('article_id', '')
+                item_repo_url = result_data.get('repo_url', '无URL')
             else:
                 item_full_text = ""
                 item_title = "无标题"
@@ -125,6 +130,7 @@ def get_detail_by_ids(neo_ids):
                 item_insert_type = "未知"
                 item_attack_ids = []
                 item_article_id = element_id
+                item_repo_url = "无URL"
 
             document_and_code_data.append({
                 'document_data': item_full_text,
@@ -134,6 +140,7 @@ def get_detail_by_ids(neo_ids):
                 'source_url': item_source_url,
                 'insert_type': item_insert_type,
                 'mitre_attack_ids': item_attack_ids,
+                'repo_url': item_repo_url,
                 'article_id': item_article_id
             })
         elif neo_data.get('type') == 'software':
@@ -145,12 +152,14 @@ def get_detail_by_ids(neo_ids):
                 WHERE elementId(software) = "{element_id}"
                 RETURN software.name as software_name,
                        software.description as software_description,
-                       elementId(software) as software_id
+                       elementId(software) as software_id,
+                       software.repo_url as repo_url
             """
 
             software_name = "无名称"
             software_description = "无描述"
             software_id = element_id
+            software_repo_url = "无URL"
 
             with driver.session(**SESSION_KWARGS) as session:
                 software_result = session.run(software_info_query)
@@ -160,11 +169,12 @@ def get_detail_by_ids(neo_ids):
                     software_name = software_data.get('software_name', '无名称')
                     software_description = software_data.get('software_description', '无描述')
                     software_id = software_data.get('software_id', element_id)
-
+                    software_repo_url = software_data.get('repo_url', '无URL')
+                
             # 这是为了去重
             file_id_list = []
             file_id_name_dict = {}
-            # 这是 software_id, 接下来要通过 software 找文章
+            # 这是 software_id, 接下来要通过 software 找文件
             query = f"""
                 MATCH (software:MitreAttackCodeSoftware)-[r]->(file:MitreAttackCodeSoftwareFile)
                 WHERE elementId(software) = "{element_id}"
@@ -203,6 +213,7 @@ def get_detail_by_ids(neo_ids):
                 'software_name': software_name,
                 'software_description': software_description,
                 'software_id': software_id,
+                'repo_url': software_repo_url,
                 'code_files': code_data
             }
 
@@ -242,7 +253,8 @@ def get_articles_by_attack_id(attack_id):
     WHERE $attack_id IN article.mitre_attack_id_list
     RETURN article.title as title,
            article.article_summary as summary,
-           article.source_url as source_url
+           article.source_url as source_url,
+           article.repo_url as repo_url
     """
 
     articles = []
@@ -260,7 +272,8 @@ def get_articles_by_attack_id(attack_id):
             articles.append({
                 'title': record.get('title', '无标题'),
                 'description': short_description,
-                'source_url': record.get('source_url', '无URL')
+                'source_url': record.get('source_url', '无URL'),
+                'repo_url': record.get('repo_url', '无URL')
             })
 
     return {
@@ -282,6 +295,7 @@ def get_all_articles():
            article.article_summary as summary,
            article.source_url as source_url,
            article.insert_type as insert_type,
+           article.repo_url as repo_url,
            article.mitre_attack_id_list as mitre_attack_id_list
     ORDER BY article.title
     """
@@ -309,7 +323,8 @@ def get_all_articles():
                 'description': short_description,
                 'source_url': record.get('source_url', '无URL'),
                 'insert_type': record.get('insert_type', '未知'),
-                'mitre_attack_ids': attack_ids
+                'mitre_attack_ids': attack_ids,
+                'repo_url': record.get('repo_url', '无URL')
             })
 
     return {
@@ -327,7 +342,8 @@ def get_all_software():
     MATCH (software:MitreAttackCodeSoftware)
     RETURN elementId(software) as software_id,
            software.name as name,
-           software.description as description
+           software.description as description,
+           software.repo_url as repo_url
     ORDER BY software.name
     """
 
@@ -346,7 +362,8 @@ def get_all_software():
             software_list.append({
                 'software_id': record.get('software_id', ''),
                 'name': record.get('name', '无名称'),
-                'description': short_description
+                'description': short_description,
+                'repo_url': record.get('repo_url', '无URL')
             })
 
     return {
