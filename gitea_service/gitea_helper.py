@@ -12,7 +12,7 @@ import shutil
 import uuid
 import time
 import stat
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from urllib.parse import quote
 from red_kbs_analyzer.run_logs.logger import logger
 import requests
@@ -270,9 +270,9 @@ except Exception as e:
 
 def upload_to_gitea(
     extract_dir: str, repo_name: str, description: str = ""
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
-    将文件夹上传到 Gitea 并返回仓库的 web_url
+    将文件夹上传到 Gitea 并返回仓库的 web_url 和分支名称
 
     Args:
         extract_dir: 要上传的文件夹路径
@@ -280,17 +280,17 @@ def upload_to_gitea(
         description: 仓库描述
 
     Returns:
-        成功返回仓库的 web_url，失败返回 None
+        成功返回仓库的 web_url 和分支名称，失败返回 None 和 None
     """
     try:
         extract_dir = os.path.abspath(extract_dir)
         if not os.path.exists(extract_dir):
             logger.error(f"[upload_to_gitea] 文件夹不存在: {extract_dir}")
-            return None
+            return None, None
 
         if not os.path.isdir(extract_dir):
             logger.error(f"[upload_to_gitea] 路径不是文件夹: {extract_dir}")
-            return None
+            return None, None
 
         # 使用全局 gitea_service 实例
         service = gitea_service
@@ -298,7 +298,7 @@ def upload_to_gitea(
         # 确保组织存在
         if not service.ensure_org_exists(GITEA_ORG_NAME):
             logger.error(f"[upload_to_gitea] 无法确保组织存在: {GITEA_ORG_NAME}")
-            return None
+            return None, None
 
         # 创建仓库
         repo_info = service.create_repo(
@@ -311,13 +311,13 @@ def upload_to_gitea(
 
         if not repo_info:
             logger.error("[upload_to_gitea] 无法创建或获取仓库")
-            return None
+            return None, None
 
         # 获取克隆 URL（带认证信息）
         clone_url = service.get_repo_clone_url(repo_info)
         if not clone_url:
             logger.error("[upload_to_gitea] 无法获取仓库克隆 URL")
-            return None
+            return None, None
 
         logger.info(f"[upload_to_gitea] 开始上传文件夹内容到仓库...")
         logger.info(f"[upload_to_gitea] 源文件夹: {extract_dir}")
@@ -362,6 +362,7 @@ def upload_to_gitea(
 
             # 推送代码
             logger.info("[upload_to_gitea] 推送代码到 Gitea...")
+            branch_name = "main"
             # 尝试推送到 main 分支，如果失败则尝试 master
             try:
                 subprocess.run(
@@ -380,11 +381,12 @@ def upload_to_gitea(
                         text=True,
                     )
                     logger.info("[upload_to_gitea] 代码已推送到 master 分支")
+                    branch_name = "master"
                 except subprocess.CalledProcessError as e:
                     logger.error(
                         f"[upload_to_gitea] 推送失败: {e.stderr if e.stderr else e}"
                     )
-                    return None
+                    return None, None
 
             # 恢复原始工作目录
             os.chdir(original_cwd)
@@ -392,7 +394,7 @@ def upload_to_gitea(
             web_url = repo_info.get("html_url", "")
             logger.info(f"[upload_to_gitea] 文件夹内容已成功上传到 Gitea 仓库")
             logger.info(f"[upload_to_gitea] 仓库 Web URL: {web_url}")
-            return web_url
+            return web_url, branch_name
 
         except subprocess.CalledProcessError as e:
             logger.error(
@@ -402,23 +404,23 @@ def upload_to_gitea(
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
         except Exception as e:
             logger.error(f"[upload_to_gitea] 上传过程异常: {e}")
             try:
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
 
     except Exception as e:
         logger.error(f"[upload_to_gitea] 上传失败: {e}")
-        return None
+        return None, None
 
 
 def upload_file_to_gitea(
     file_path: str, repo_name: str, description: str = ""
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     将单个文件上传到 Gitea 并返回仓库的 web_url
     一个文件对应一个仓库
@@ -435,11 +437,11 @@ def upload_file_to_gitea(
         file_path = os.path.abspath(file_path)
         if not os.path.exists(file_path):
             logger.error(f"[upload_file_to_gitea] 文件不存在: {file_path}")
-            return None
+            return None, None
 
         if not os.path.isfile(file_path):
             logger.error(f"[upload_file_to_gitea] 路径不是文件: {file_path}")
-            return None
+            return None, None
 
         # 使用全局 gitea_service 实例
         service = gitea_service
@@ -447,7 +449,7 @@ def upload_file_to_gitea(
         # 确保组织存在
         if not service.ensure_org_exists(GITEA_ORG_NAME):
             logger.error(f"[upload_file_to_gitea] 无法确保组织存在: {GITEA_ORG_NAME}")
-            return None
+            return None, None
 
         # 创建仓库
         repo_info = service.create_repo(
@@ -460,13 +462,13 @@ def upload_file_to_gitea(
 
         if not repo_info:
             logger.error("[upload_file_to_gitea] 无法创建或获取仓库")
-            return None
+            return None, None
 
         # 获取克隆 URL（带认证信息）
         clone_url = service.get_repo_clone_url(repo_info)
         if not clone_url:
             logger.error("[upload_file_to_gitea] 无法获取仓库克隆 URL")
-            return None
+            return None, None
 
         logger.info(f"[upload_file_to_gitea] 开始上传文件到仓库...")
         logger.info(f"[upload_file_to_gitea] 源文件: {file_path}")
@@ -521,7 +523,8 @@ def upload_file_to_gitea(
             # 添加远程仓库
             logger.info("[upload_file_to_gitea] 配置远程仓库...")
             subprocess.run(["git", "remote", "add", "origin", clone_url], check=True)
-
+            branch_name = "main"
+            
             # 推送代码
             logger.info("[upload_file_to_gitea] 推送代码到 Gitea...")
             # 尝试推送到 main 分支，如果失败则尝试 master
@@ -542,15 +545,16 @@ def upload_file_to_gitea(
                         text=True,
                     )
                     logger.info("[upload_file_to_gitea] 代码已推送到 master 分支")
+                    branch_name = "master"
                 except subprocess.CalledProcessError as e:
                     logger.error(
                         f"[upload_file_to_gitea] 推送失败: {e.stderr if e.stderr else e}"
                     )
-                    return None
+                    return None, None
             web_url = repo_info.get("html_url", "")
             logger.info(f"[upload_file_to_gitea] 文件已成功上传到 Gitea 仓库")
             logger.info(f"[upload_file_to_gitea] 仓库 Web URL: {web_url}")
-            return web_url
+            return web_url, branch_name
 
         except subprocess.CalledProcessError as e:
             logger.error(
@@ -560,14 +564,14 @@ def upload_file_to_gitea(
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
         except Exception as e:
             logger.error(f"[upload_file_to_gitea] 上传过程异常: {e}")
             try:
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
         finally:
             # Git push 成功，恢复原始工作目录，并删除相关文件夹
             os.chdir(original_cwd)
@@ -600,4 +604,4 @@ def upload_file_to_gitea(
 
     except Exception as e:
         logger.error(f"[upload_file_to_gitea] 上传失败: {e}")
-        return None
+        return None, None

@@ -1103,12 +1103,15 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     try:
         repo_name = handle_reponame(file_name)
         print(f"{file_name} Gitea 仓库名称: {repo_name}")
-        repo_url = upload_file_to_gitea(
+        repo_url, branch_name = upload_file_to_gitea(
             file_path, repo_name, f"Uploaded file: {file_name}"
         )
+        if not repo_url or not branch_name:
+            return {"status": "error", "message": "Gitea 上传失败"}
     except Exception as e:
         print(f"{file_name} Gitea 上传异常: {e}")
         return {"status": "error", "message": str(e)}
+    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_name}"
 
     # 进行文章插入
     insert_neo4j_document_data_without_embedding(
@@ -1118,11 +1121,11 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
         file_name_txt,
         summary_text,
         document_insert_number,
-        repo_url
+        file_repo_url,
     )
     print(f"{file_name} 文章插入完成")
     # 进行 chunk 插入
-    all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name,repo_url)
+    all_chunk_element_id = insert_neo4j_chunk(chunk_json_file_name, source_name,file_repo_url)
     print(f"{file_name} chunk 插入完成")
     # 增加 文章 chunk 关系
     add_document_chunk_rel(source_name)

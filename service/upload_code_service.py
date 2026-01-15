@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import json
 import tarfile
@@ -273,10 +274,13 @@ def generate_code_chunk_description(code_data, file_name=None):
         return None
 
 
-def handle_json_file(data, insert_number,repo_url):
+def handle_json_file(data, insert_number, repo_url, branch_name):
     behind_uuid = str(uuid.uuid4())
     software_uuid = f"software-{behind_uuid}"
     behind_file_uuid = "file-{}-{}"
+    software_root_path = ""
+    if "software_path" in data:
+        software_root_path = data["software_path"]
 
     logger.info(f"[handle_json_file] 开始处理上传 JSON，生成软件 UUID={software_uuid}")
     # # 用户上传的和文件一样, 都是 0
@@ -346,6 +350,13 @@ def handle_json_file(data, insert_number,repo_url):
         for single_file in software_files_data:
             file_name = single_file.get("file_name")
             file_uuid = behind_file_uuid.format(behind_uuid, index)
+            # 获取当前文件的相对目录
+            file_relative_path = os.path.relpath(single_file.get("file_abs_path"), start=software_root_path)
+            # 将路径转换为 URL 格式（跨平台兼容：Windows 和 Linux 都使用正斜杠）
+            file_relative_path_url = pathlib.Path(file_relative_path).as_posix()
+            file_repo_url = (
+                f"{repo_url}/src/branch/{branch_name}/{file_relative_path_url}"
+            )
             all_file_ids.append(file_uuid)
             logger.info(
                 f"[handle_json_file] 处理文件[{index}] name={file_name} uuid={file_uuid}"
@@ -367,7 +378,7 @@ def handle_json_file(data, insert_number,repo_url):
                     file_name=file_name,
                     software_uuid=software_uuid,
                     insert_number=insert_number,
-                    repo_url=repo_url,
+                    repo_url=file_repo_url,
                 )
             logger.info(f"[handle_json_file] 文件节点 MERGE 完成 uuid={file_uuid}")
             index += 1
@@ -602,7 +613,7 @@ def handle_json_file(data, insert_number,repo_url):
                     chunks=chunks_data,
                     file_uuid=file_uuid,
                     insert_number=insert_number,
-                    repo_url=repo_url,
+                    repo_url=file_repo_url,
                 )
 
                 # 创建 code_uuid -> elementId 的映射，用于同步到 all_chunks_data
@@ -1409,47 +1420,60 @@ def add_milvus_from_chunks(all_chunks_data, repo_url: str = ""):
     else:
         print("没有有效数据需要导入")
 
-def handle_code(source_name, file_path, file_name, file_type, extract_dir, insert_number):
+
+def handle_code(
+    source_name, file_path, file_name, file_type, extract_dir, insert_number
+):
     try:
-    # 使用线程池并发执行：代码处理和 Gitea 上传
+        # 使用线程池并发执行：代码处理和 Gitea 上传
         with ThreadPoolExecutor(max_workers=2) as executor:
             # 任务1：分析代码，处理 JSON 文件和建立关系（串行执行）
             def process_code_data():
                 result = analysis_code(extract_dir, source_name)
                 return result
-            
+
             # 任务2：上传到 Gitea（并发执行）
             def upload_to_gitea_task():
                 try:
                     logger.info(f"[handle_code] 开始上传项目到 Gitea: {source_name}")
-                    repo_url = upload_to_gitea(
+                    repo_url, branch_name = upload_to_gitea(
                         extract_dir=extract_dir,
                         repo_name=source_name,
-                        description=f"项目: {source_name}"
+                        description=f"项目: {source_name}",
                     )
                     if repo_url:
-                        logger.info(f"[handle_code] Gitea 上传成功，仓库 URL: {repo_url}")
+                        logger.info(
+                            f"[handle_code] Gitea 上传成功，仓库 URL: {repo_url}"
+                        )
+                        logger.info(f"[handle_code] Gitea 分支名称: {branch_name}")
                     else:
-                        logger.warning(f"[handle_code] Gitea 上传失败，将继续处理但不记录仓库 URL")
-                    return repo_url or ""  # 确保返回字符串，不能是 None
+                        logger.warning(
+                            f"[handle_code] Gitea 上传失败，将继续处理但不记录仓库 URL"
+                        )
+                    return (
+                        repo_url or "",
+                        branch_name or "",
+                    )  # 确保返回字符串，不能是 None
                 except Exception as e:
                     logger.error(f"[handle_code] Gitea 上传异常: {e}")
                     return ""  # 上传失败返回空字符串，不影响主流程
-            
+
             # 提交并发任务
             future_result = executor.submit(process_code_data)
             future_gitea = executor.submit(upload_to_gitea_task)
-            
+
             # 等待两个任务完成
             result = future_result.result()
-            repo_url = future_gitea.result()
+            repo_url, branch_name = future_gitea.result()
+            if not repo_url or not branch_name:
+                return {"status": "error", "message": "Gitea 上传失败"}
         logger.info(f"[handle_code] 开始处理代码数据: {source_name}")
-        all_file_ids, software_uuid, all_embedding_element_id, all_chunks_for_milvus = handle_json_file(result.to_dict(), insert_number,repo_url)
+        all_file_ids, software_uuid, all_embedding_element_id, all_chunks_for_milvus = handle_json_file(result.to_dict(), insert_number,repo_url, branch_name)
         # 建立关系（只针对 Neo4j 中的代码块）
         add_relateship(all_file_ids, software_uuid, insert_number)
         logger.info(f"[handle_code] 代码数据处理完成: {source_name}")
         add_milvus_from_chunks(all_chunks_for_milvus, repo_url=repo_url)
         return {"status": "success"}
-        
+
     except Exception as e:
         return {"status": "error", "message": str(e)}
