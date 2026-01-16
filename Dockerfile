@@ -14,7 +14,9 @@ RUN apt-get update && apt-get install -y \
     zlib1g-dev \
     libbz2-dev \
     language-pack-zh-hans \
-    liblzma-dev xz-utils libmagic1 unrar checksec    # 添加 xz-utils 支持 lzma 压缩
+    liblzma-dev xz-utils libmagic1 unrar checksec \
+    git \
+    libreoffice    # 添加 git 和 LibreOffice (soffice) 支持
 
 ENV PYTHON_VERSION=3.13.2
 
