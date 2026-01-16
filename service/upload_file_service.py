@@ -1111,7 +1111,11 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     except Exception as e:
         print(f"{file_name} Gitea 上传异常: {e}")
         return {"status": "error", "message": str(e)}
-    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_name}"
+    file_name_show = file_name
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext in [".pptx", ".doc", ".docx"]:
+        file_name_show = os.path.splitext(file_name)[0] + ".pdf"
+    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_name_show}"
 
     # 进行文章插入
     insert_neo4j_document_data_without_embedding(

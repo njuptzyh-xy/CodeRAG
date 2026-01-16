@@ -496,6 +496,62 @@ def upload_file_to_gitea(
             # 切换到临时目录
             os.chdir(tmp_root)
 
+            # 如果文件类型为 .pptx, .doc, .docx，则用 soffice 转为 pdf（与上传保存时文件名一致）
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in [".pptx", ".doc", ".docx"]:
+                try:
+
+                    if os.name != "nt":
+                        #在windows环境下，执行soffice --version命令，会出现弹窗，提示Press Enter to continue...，导致阻塞
+                        # 检查 soffice 是否可用）
+                        try:
+                            subprocess.run(
+                                ["soffice", "--version"],
+                                check=True,
+                                capture_output=True,
+                                timeout=5,
+                                stdin=subprocess.DEVNULL   # 避免命令行交互弹窗
+                            )
+                        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                            logger.warning(f"[upload_file_to_gitea] soffice 不可用，跳过 PDF 转换")
+                            raise  # 重新抛出异常，让外层 except 处理
+                    logger.info(f"[upload_file_to_gitea] 检测到文件类型 {ext}，尝试用 soffice 转为 PDF...")
+                    # 构造转换命令
+                    convert_cmd = [
+                        "soffice",
+                        "--headless",
+                        "--invisible",
+                        "--convert-to", "pdf",
+                        "--outdir", tmp_root,
+                        file_name
+                    ]
+                    # 在 Windows 下需使用 cmd 执行 soffice 命令，避免未识别命令问题
+                    if os.name == "nt":
+                        # 组装完整命令行字符串（带引号）
+                        soffice_cmd_str = f'soffice --headless --invisible --convert-to pdf  {file_name}'
+                        result = subprocess.run(
+                            soffice_cmd_str, shell=True, check=True, capture_output=True, text=True
+                        )
+                    else:
+                        # 非 Windows 直接调用
+                        result = subprocess.run(
+                            convert_cmd, check=True, capture_output=True, text=True
+                        )
+                    logger.info(f"[upload_file_to_gitea] soffice 输出: {result.stdout.strip()} {result.stderr.strip()}")
+                    # 转换后的pdf文件名
+                    pdf_file_name = os.path.splitext(file_name)[0] + ".pdf"
+                    pdf_file_path = os.path.join(tmp_root, pdf_file_name)
+                    if os.path.isfile(pdf_file_path):
+                        logger.info(f"[upload_file_to_gitea] PDF 文件已生成: {pdf_file_name}")
+                        # 如果生成了 PDF，则只上传 PDF 文件，删除原来的 office 文件
+                        os.remove(dest_file_path)
+                        dest_file_path = pdf_file_path
+                        file_name = pdf_file_name
+                    else:
+                        logger.warning(f"[upload_file_to_gitea] PDF 文件未生成, 继续上传原文件")
+                except Exception as e:
+                    logger.warning(f"[upload_file_to_gitea] 转换PDF出错: {e}，将继续上传原文件")
+
             # 初始化 git 仓库
             logger.info("[upload_file_to_gitea] 初始化 Git 仓库...")
             subprocess.run(["git", "init"], check=True, capture_output=True)
