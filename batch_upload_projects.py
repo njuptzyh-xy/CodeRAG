@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import pathlib
 import re
 import shutil
 import sys
@@ -7,7 +9,7 @@ import subprocess
 import time
 import uuid
 import requests
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List,Tuple
 from urllib.parse import quote
 from datetime import datetime
 import stat
@@ -47,6 +49,28 @@ GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 SESSION_KWARGS = {"database": NEO4J_DATABASE}
 driver = GraphDatabase.driver(NEO4J_URI, auth=AUTH)
+
+ # 支持的代码文件扩展名
+CODE_EXTENSIONS = {
+    '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', 
+    '.cs', '.js', '.ts', '.sh', '.ps1', '.rb', '.php', '.swift',
+    '.kt', '.scala', '.r', '.pl', '.lua', '.m', '.mm'
+}
+max_file_size = 1024 * 1024
+
+# 忽略的目录
+IGNORE_DIRS = {
+    '.git', '.svn', '.hg', '__pycache__', 'node_modules', 
+    '.vscode', '.idea', 'build', 'dist', 'target', 'bin', 'obj',
+    '.pytest_cache', '.mypy_cache', 'venv', 'env', '.env'
+}
+
+# 忽略的文件
+IGNORE_FILES = {
+    '.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db',
+    '.pylintrc', '.flake8', 'pytest.ini', 'setup.cfg', 'tox.ini'
+}
+
 
 # 连接 Milvus - 改进错误处理
 milvus_connected = False
@@ -358,7 +382,7 @@ def handle_reponame(file_name: str) -> str:
 
 def upload_file_to_gitea(
     file_path: str, repo_name: str, description: str = "", service: Optional[GiteaService] = None
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     将单个文件上传到 Gitea 并返回仓库的 web_url
     一个文件对应一个仓库
@@ -375,11 +399,11 @@ def upload_file_to_gitea(
         file_path = os.path.abspath(file_path)
         if not os.path.exists(file_path):
             print(f"[FAIL] [upload_file_to_gitea] 文件不存在: {file_path}")
-            return None
+            return None, None
 
         if not os.path.isfile(file_path):
             print(f"[FAIL] [upload_file_to_gitea] 路径不是文件: {file_path}")
-            return None
+            return None, None
 
         if service is None:
             service = GiteaService(
@@ -390,11 +414,11 @@ def upload_file_to_gitea(
 
             if not service.authenticate():
                 print("[FAIL] [upload_file_to_gitea] 认证失败")
-                return None
+                return None, None
         # 确保组织存在
         if not service.ensure_org_exists(GITEA_ORG_NAME):
             print(f"[FAIL] [upload_file_to_gitea] 无法确保组织存在: {GITEA_ORG_NAME}")
-            return None
+            return None, None
 
         # 创建仓库
         repo_info = service.create_repo(
@@ -407,13 +431,13 @@ def upload_file_to_gitea(
 
         if not repo_info:
             print("[FAIL] [upload_file_to_gitea] 无法创建或获取仓库")
-            return None
+            return None, None
 
         # 获取克隆 URL（带认证信息）
         clone_url = service.get_repo_clone_url(repo_info)
         if not clone_url:
             print("[FAIL] [upload_file_to_gitea] 无法获取仓库克隆 URL")
-            return None
+            return None, None
 
         print(f"[INFO] [upload_file_to_gitea] 开始上传文件到仓库...")
         print(f"[INFO] [upload_file_to_gitea] 源文件: {file_path}")
@@ -440,6 +464,61 @@ def upload_file_to_gitea(
 
             # 切换到临时目录
             os.chdir(tmp_root)
+            # 如果文件类型为 .pptx, .doc, .docx，则用 soffice 转为 pdf（与上传保存时文件名一致）
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in [".pptx", ".doc", ".docx"]:
+                try:
+
+                    if os.name != "nt":
+                        #在windows环境下，执行soffice --version命令，会出现弹窗，提示Press Enter to continue...，导致阻塞
+                        # 检查 soffice 是否可用）
+                        try:
+                            subprocess.run(
+                                ["soffice", "--version"],
+                                check=True,
+                                capture_output=True,
+                                timeout=5,
+                                stdin=subprocess.DEVNULL   # 避免命令行交互弹窗
+                            )
+                        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                            print(f"[upload_file_to_gitea] soffice 不可用，跳过 PDF 转换")
+                            raise  # 重新抛出异常，让外层 except 处理
+                    print(f"[upload_file_to_gitea] 检测到文件类型 {ext}，尝试用 soffice 转为 PDF...")
+                    # 构造转换命令
+                    convert_cmd = [
+                        "soffice",
+                        "--headless",
+                        "--invisible",
+                        "--convert-to", "pdf",
+                        "--outdir", tmp_root,
+                        file_name
+                    ]
+                    # 在 Windows 下需使用 cmd 执行 soffice 命令，避免未识别命令问题
+                    if os.name == "nt":
+                        # 组装完整命令行字符串（带引号）
+                        soffice_cmd_str = f'soffice --headless --invisible --convert-to pdf  {file_name}'
+                        result = subprocess.run(
+                            soffice_cmd_str, shell=True, check=True, capture_output=True, text=True
+                        )
+                    else:
+                        # 非 Windows 直接调用
+                        result = subprocess.run(
+                            convert_cmd, check=True, capture_output=True, text=True
+                        )
+                    print(f"[upload_file_to_gitea] soffice 输出: {result.stdout.strip()} {result.stderr.strip()}")
+                    # 转换后的pdf文件名
+                    pdf_file_name = os.path.splitext(file_name)[0] + ".pdf"
+                    pdf_file_path = os.path.join(tmp_root, pdf_file_name)
+                    if os.path.isfile(pdf_file_path):
+                        print(f"[upload_file_to_gitea] PDF 文件已生成: {pdf_file_name}")
+                        # 如果生成了 PDF，则只上传 PDF 文件，删除原来的 office 文件
+                        os.remove(dest_file_path)
+                        dest_file_path = pdf_file_path
+                        file_name = pdf_file_name
+                    else:
+                        print(f"[upload_file_to_gitea] PDF 文件未生成, 继续上传原文件")
+                except Exception as e:
+                    print(f"[upload_file_to_gitea] 转换PDF出错: {e}，将继续上传原文件")
 
             # 初始化 git 仓库
             print("[INFO] [upload_file_to_gitea] 初始化 Git 仓库...")
@@ -471,6 +550,7 @@ def upload_file_to_gitea(
 
             # 推送代码
             print("[INFO] [upload_file_to_gitea] 推送代码到 Gitea...")
+            branch_name = "main"
             # 尝试推送到 main 分支，如果失败则尝试 master
             try:
                 subprocess.run(
@@ -489,15 +569,16 @@ def upload_file_to_gitea(
                         text=True,
                     )
                     print("[INFO] [upload_file_to_gitea] 代码已推送到 master 分支")
+                    branch_name = "master"
                 except subprocess.CalledProcessError as e:
                     print(
                         f"[FAIL] [upload_file_to_gitea] 推送失败: {e.stderr if e.stderr else e}"
                     )
-                    return None
+                    return None, None
             web_url = repo_info.get("html_url", "")
             print(f"[OK] [upload_file_to_gitea] 文件已成功上传到 Gitea 仓库")
             print(f"[INFO] [upload_file_to_gitea] 仓库 Web URL: {web_url}")
-            return web_url
+            return web_url, branch_name
 
         except subprocess.CalledProcessError as e:
             print(
@@ -507,14 +588,14 @@ def upload_file_to_gitea(
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
         except Exception as e:
             print(f"[FAIL] [upload_file_to_gitea] 上传过程异常: {e}")
             try:
                 os.chdir(original_cwd)
             except:
                 pass
-            return None
+            return None, None
         finally:
             # Git push 成功，恢复原始工作目录，并删除相关文件夹
             os.chdir(original_cwd)
@@ -547,7 +628,7 @@ def upload_file_to_gitea(
 
     except Exception as e:
         print(f"[FAIL] [upload_file_to_gitea] 上传失败: {e}")
-        return None
+        return None, None
 
 
 
@@ -557,7 +638,7 @@ def upload_folder_to_gitea(
     org_name: Optional[str] = None,
     description: str = "",
     service: Optional[GiteaService] = None
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     将文件夹内容上传到 Gitea 仓库
 
@@ -574,11 +655,11 @@ def upload_folder_to_gitea(
     folder_path = os.path.abspath(folder_path)
     if not os.path.exists(folder_path):
         print(f"[FAIL] 文件夹不存在: {folder_path}")
-        return False
+        return None, None
 
     if not os.path.isdir(folder_path):
         print(f"[FAIL] 路径不是文件夹: {folder_path}")
-        return False
+        return None, None
 
     # 确定仓库名称
     if not repo_name:
@@ -595,7 +676,7 @@ def upload_folder_to_gitea(
         # 认证
         if not service.authenticate():
             print("[FAIL] 认证失败")
-            return False
+            return None, None
 
     # 确定组织名称
     target_org_name = org_name or GITEA_ORG_NAME
@@ -604,7 +685,7 @@ def upload_folder_to_gitea(
     if target_org_name:
         if not service.ensure_org_exists(target_org_name):
             print(f"[FAIL] 无法确保组织存在: {target_org_name}")
-            return False
+            return None, None
 
     # 创建仓库
     repo_info = service.create_repo(
@@ -617,13 +698,13 @@ def upload_folder_to_gitea(
 
     if not repo_info:
         print("[FAIL] 无法创建或获取仓库")
-        return False
+        return None, None
 
     # 获取克隆 URL（带认证信息）
     clone_url = service.get_repo_clone_url(repo_info)
     if not clone_url:
         print("[FAIL] 无法获取仓库克隆 URL")
-        return False
+        return None, None
 
     print(f"[INFO] 开始上传文件夹内容到仓库...")
     print(f"      源文件夹: {folder_path}")
@@ -670,6 +751,7 @@ def upload_folder_to_gitea(
 
         # 推送代码
         print("[INFO] 推送代码到 Gitea...")
+        branch_name = "main"
         # 尝试推送到 main 分支，如果失败则尝试 master
         try:
             subprocess.run(
@@ -688,17 +770,18 @@ def upload_folder_to_gitea(
                     text=True
                 )
                 print("[OK] 代码已推送到 master 分支")
+                branch_name = "master"
             except subprocess.CalledProcessError as e:
                 print(f"[FAIL] 推送失败: {e.stderr if e.stderr else e}")
-                return False
+                return None, None
 
         # 恢复原始工作目录
         os.chdir(original_cwd)
 
         print(f"[OK] 文件夹内容已成功上传到 Gitea 仓库")
         if not repo_info.get("html_url"):
-            return False
-        return repo_info.get("html_url")
+            return None, None
+        return repo_info.get("html_url"), branch_name
 
     except subprocess.CalledProcessError as e:
         print(f"[FAIL] Git 操作失败: {e.stderr.decode() if e.stderr else str(e)}")
@@ -706,16 +789,16 @@ def upload_folder_to_gitea(
             os.chdir(original_cwd)
         except:
             pass
-        return False
+        return None, None
     except Exception as e:
         print(f"[FAIL] 上传过程异常: {e}")
         try:
             os.chdir(original_cwd)
         except:
             pass
-        return False
+        return None, None
 
-def update_repo_url(repo_url: str, software_name: str) -> List[str]:
+def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_files: List[str]) -> Tuple[List[str], str]:
     """
     更新仓库的 URL 到 Neo4j 图数据库中的相关节点
 
@@ -731,6 +814,24 @@ def update_repo_url(repo_url: str, software_name: str) -> List[str]:
 
         # 初始化 Neo4j 连接
         neo4j_helper = Neo4jHelper()
+        # 检查是否有文件名重复的情况
+        duplicate_query = """
+        MATCH (software:MitreAttackCodeSoftware {name: $software_name})
+              -[:CODE_SOFTWARE_HAS_CODE_SOFTWARE_FILE]->
+              (file:MitreAttackCodeSoftwareFile)
+        WITH file.name AS file_name, COUNT(file) AS file_count
+        WHERE file_count > 1
+        WITH COUNT(*) AS duplicate_count
+        RETURN duplicate_count > 0 AS has_duplicates, duplicate_count AS duplicate_file_count
+        """
+        with neo4j_helper.neo4j_driver.session(**neo4j_helper.session_kwargs) as duplicate_session:
+            duplicate_result = duplicate_session.run(duplicate_query, software_name=software_name)
+            duplicate_info = duplicate_result.single()
+            if duplicate_info and duplicate_info["has_duplicates"]:
+                print(f"[FAIL] 存在文件名重复情况, 共有 {duplicate_info['duplicate_file_count']} 个重复文件名。")
+                return [], "文件名重复"
+
+
         code_chunk_element_ids = []
 
         # 查询软件节点及其关联的文件和代码块
@@ -763,6 +864,10 @@ def update_repo_url(repo_url: str, software_name: str) -> List[str]:
                 if record.get("code"):
                     code_nodes.append(record["code"])
 
+            #如果当前software_node依旧为空，那么说明当前项目没有经过知识库存储
+            if not software_node:
+                print(f"[FAIL] 当前项目{software_name}没有经过知识库存储,跳过更新")
+                return [],""
             # 更新 software 节点的 repo_url
             if software_node:
                 session.run(
@@ -781,11 +886,23 @@ def update_repo_url(repo_url: str, software_name: str) -> List[str]:
 
             # 更新 file 节点的 repo_url
             for file_node in unique_file_nodes:
-                session.run(
-                    "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
-                    element_id=file_node.element_id, repo_url=repo_url
-                )
-                print(f"[INFO] 更新 File 节点 repo_url: {file_node.element_id}")
+                #根据all_files中的相对目录名，去查找当前file_node的相对目录
+                namefile = file_node.get("name")
+                matching_path = None
+                for rel_path in all_files:
+                    if os.path.basename(rel_path) == namefile:
+                        matching_path = rel_path
+                        break
+                if matching_path:
+                    file_relative_path = pathlib.Path(matching_path).as_posix()
+                    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_relative_path}"
+                    session.run(
+                        "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                        element_id=file_node.element_id, repo_url=file_repo_url
+                    )
+                    print(f"[INFO] 更新 File 节点 repo_url: {file_node.element_id}")
+                else:
+                    print(f"[WARN] 未找到文件 {namefile} 在 all_files 中的匹配路径")
 
             # 去重 code_nodes 并收集 element_id
             seen_code_elements = set()
@@ -800,16 +917,16 @@ def update_repo_url(repo_url: str, software_name: str) -> List[str]:
             for code_node in unique_code_nodes:
                 session.run(
                     "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
-                    element_id=code_node.element_id, repo_url=repo_url
+                    element_id=code_node.element_id, repo_url=file_repo_url
                 )
                 print(f"[INFO] 更新 CodeChunk 节点 repo_url: {code_node.element_id}")
 
             print(f"[OK] 成功更新 {len(unique_file_nodes)} 个 File 节点和 {len(unique_code_nodes)} 个 CodeChunk 节点的 repo_url")
-            return code_chunk_element_ids
+            return code_chunk_element_ids, ""
 
     except Exception as e:
         print(f"[FAIL] 更新仓库 URL 失败: {e}")
-        return []
+        return [],""
 
 def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str, repo_url: str) -> bool:
     """
@@ -950,6 +1067,12 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
                 # 处理 chunk 节点
                 if record.get("chunk"):
                     chunk_nodes.append(record["chunk"])
+            
+
+            #如果当前document_node依旧为空，那么说明当前项目没有经过知识库存储
+            if not document_node:
+                print(f"[FAIL] 当前文件{document_name}没有经过知识库存储,跳过更新")
+                return []
 
             # 更新 document 节点的 repo_url
             if document_node:
@@ -1125,23 +1248,60 @@ def batch_upload_folders_code(
     success_count = 0
     fail_count = 0
 
+    def _walk_directory(directory: Path) -> List[Path]:
+            """遍历目录，返回所有文件路径"""
+            files = []
+            
+            for item in directory.rglob('*'):
+                if item.is_file():
+                    # 检查是否在忽略的目录中
+                    if any(ignore_dir in item.parts for ignore_dir in IGNORE_DIRS):
+                        continue
+                    # 检查是否是忽略的文件
+                    if item.name in IGNORE_FILES:
+                        continue
+                    files.append(item)
+            
+            return files
+
+    def _is_code_file(file_path: Path):
+        """判断是否为代码文件"""
+        return file_path.suffix.lower() in CODE_EXTENSIONS
+    def _is_valid_file(file_path: Path):
+        """判断文件是否有效（大小限制等）"""
+        try:
+            file_size = file_path.stat().st_size
+            return file_size <= max_file_size
+        except OSError:
+            return False
+
+    duplicate_repos = []
     for i, folder_path in enumerate(subfolders, 1):
         folder_name = os.path.basename(folder_path)
         print(f"\n[{i}/{len(subfolders)}] 正在处理: {folder_name}")
         print("-" * 80)
+        all_files = []
+        for file_path in _walk_directory(Path(folder_path)):
+            if _is_code_file(file_path) and _is_valid_file(file_path):
+                file_relative_path = os.path.relpath(file_path, start=folder_path)
+                all_files.append(file_relative_path)
+        print(f"[INFO] {folder_name} 包含 {len(all_files)} 个文件:")
 
         description = f"{description_template} - {folder_name}"
-        repo_url = upload_folder_to_gitea(
+        repo_url, branch_name = upload_folder_to_gitea(
             folder_path=folder_path,
             repo_name=folder_name,
             org_name=org_name,
             description=description,
             service=service
         )
-        if not repo_url:
+        if not repo_url or not branch_name:
             print(f"[FAIL] 上传失败: {folder_name}")
             continue
-        code_chunk_element_ids = update_repo_url(repo_url, folder_name)
+        code_chunk_element_ids, msg = update_repo_url(repo_url, folder_name, branch_name, all_files)
+        if msg == "文件名重复":
+            duplicate_repos.append(folder_name)
+            continue
         if not code_chunk_element_ids:
             print(f"[FAIL] 更新仓库 URL 失败: {folder_name}")
             continue
@@ -1166,6 +1326,10 @@ def batch_upload_folders_code(
             fail_count += 1
 
         print(f"[{'OK' if repo_url else 'FAIL'}] {folder_name}: {'成功' if repo_url else '失败'}")
+    if duplicate_repos:
+        print(f"[FAIL] 存在项目中的文件名重复情况, 共有 {len(duplicate_repos)} 个重复项目。这些项目不适用于批量上传，需要重新被知识库进行处理")
+        print(f"重复项目名: {duplicate_repos}")
+        return {}
 
     # 打印总结
     print("\n" + "=" * 80)
@@ -1249,19 +1413,25 @@ def batch_upload_folders_file(
 
         # 上传文件文件夹到 Gitea（使用文件夹名称作为仓库名）
         description = f"{description_template} - {document_title}"
-        repo_url = upload_file_to_gitea(
+        repo_url, branch_name = upload_file_to_gitea(
             file_path=file_path,
             repo_name=repo_name,  # 使用原始文件夹名作为仓库名
             description=description,
             service=service
         )
-        if not repo_url:
+        if not repo_url or not branch_name:
             print(f"[FAIL] 上传失败: {file_name}")
             continue
+        
+        file_name_show = file_name
+        ext = os.path.splitext(file_name)[1].lower()
+        if ext in [".pptx", ".doc", ".docx"]:
+            file_name_show = os.path.splitext(file_name)[0] + ".pdf"
+        file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_name_show}"
 
         # 更新 Neo4j 中 ArticleDocument 和 ArticleChunk 节点的 repo_url
         # 注意：这里使用 document_title（去掉扩展名）来匹配 ArticleDocument.title
-        article_chunk_element_ids = update_repo_url_for_file(repo_url, document_title)
+        article_chunk_element_ids = update_repo_url_for_file(file_repo_url, document_title)
         if not article_chunk_element_ids:
             print(f"[FAIL] 更新文件仓库 URL 失败: {file_name}")
             print(f"[WARN] 可能原因：Neo4j 中未找到 title='{document_title}' 的 ArticleDocument 节点")
@@ -1272,7 +1442,7 @@ def batch_upload_folders_file(
         milvus_updated = add_milvus_from_article_chunk(
             article_chunk_element_ids=article_chunk_element_ids,
             softname=document_title,  # 使用文档标题作为 soft_name
-            repo_url=repo_url
+            repo_url=file_repo_url
         )
         if not milvus_updated:
             print(f"[WARN] Milvus 更新失败或没有匹配记录: {file_name}")
@@ -1338,18 +1508,42 @@ def main():
         print(f"组织名称: {org_name}")
     print(f"描述模板: {description_template}")
     print("=" * 80)
+    import tarfile
+    import glob
 
-    batch_upload_folders_code(
-        base_path=os.path.join(base_path, "codes"),
-        org_name=org_name,
-        description_template=description_template
-    )
+    codes_path = os.path.join(base_path, "codes")
+
+    # 解压 codes 文件夹下所有 .tar.gz 压缩包
+    if os.path.exists(codes_path) and os.path.isdir(codes_path):
+        tar_files = glob.glob(os.path.join(codes_path, "*.tar.gz"))
+        for tar_file in tar_files:
+            try:
+                print(f"[INFO] 解压: {tar_file}")
+                with tarfile.open(tar_file, "r:gz") as tar:
+                    tar.extractall(path=codes_path)
+                print(f"[OK] 解压完成: {os.path.basename(tar_file)}")
+            except Exception as e:
+                print(f"[FAIL] 解压失败: {os.path.basename(tar_file)}，原因: {e}")
+        # 删除所有压缩包文件
+        for tar_file in tar_files:
+            try:
+                os.remove(tar_file)
+                print(f"[INFO] 已删除压缩包: {os.path.basename(tar_file)}")
+            except Exception as e:
+                print(f"[FAIL] 删除压缩包失败: {os.path.basename(tar_file)}，原因: {e}")
+    else:
+        print(f"[WARN] 未找到 codes 文件夹: {codes_path}")
 
     batch_upload_folders_file(
         base_path=os.path.join(base_path, "files"),
         org_name=org_name,
         description_template=description_template
     )
+    batch_upload_folders_code(
+            base_path=os.path.join(base_path, "codes"),
+            org_name=org_name,
+            description_template=description_template
+        )
 
 
 if __name__ == "__main__":
