@@ -900,7 +900,7 @@ def _ensure_milvus_collection():
     return collection
 
 
-def add_milvus(all_embedding_element_id, repo_url=""):
+def add_milvus(all_embedding_element_id, soft_name,repo_url=""):
     """将数据添加到 Milvus 向量数据库"""
     if not milvus_connected:
         print("错误: Milvus 未连接，无法插入数据")
@@ -998,7 +998,7 @@ def add_milvus(all_embedding_element_id, repo_url=""):
     if neo4j_ids:
         try:
             repo_urls = [repo_url] * len(neo4j_ids)
-            soft_names = [""] * len(neo4j_ids)
+            soft_names = [soft_name] * len(neo4j_ids)
             # 确保字段顺序与 schema 定义一致: neo4j_id, code_data, description, code__embedding, soft_name, url
             entities = [neo4j_ids, code_datas, descriptions, embeddings, soft_names, repo_urls]
             print(f"开始插入数据到 collection {MILVUS_COLLECTION}...")
@@ -1139,13 +1139,17 @@ def handle_file(source_name, file_path, file_name, file_type, document_insert_nu
     add_document_tec_rel(source_name)
     print(f"{file_name} 文章-技术关系建立完成")
 
+    #构造原始文件名
+    original_file_name = f"{source_name}.{file_type}"
+    print(f"{file_name} 原始文件名: {original_file_name}")
+
     # 增加 milvus
     if repo_url:
-        print(f"{file_name} Gitea 上传成功，仓库 URL: {repo_url}")
-        add_milvus(all_chunk_element_id, repo_url)
+        print(f"{file_name} Gitea 上传成功，仓库 URL: {file_repo_url}")
+        add_milvus(all_chunk_element_id, original_file_name, file_repo_url)
     else:
         print(f"{file_name} Gitea 上传失败，将继续处理但不记录仓库 URL")
-        add_milvus(all_chunk_element_id)
+        add_milvus(all_chunk_element_id, original_file_name)
     print(f"{file_name} milvus 添加完成")
 
     return {"status": "success"}
