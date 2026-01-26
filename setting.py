@@ -14,9 +14,9 @@ EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "huaqing-embedding-key-9b677e
 # EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
 
 # Chat 模型设置
-CHAT_URL = os.getenv('CHAT_URL', "https://dashscope.aliyuncs.com/compatible-mode/v1")
-CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-v3")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-53102f66e8284a5885f1114bb15cc868")
+CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
+CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
+CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-53b49f7e5a9748a58ac7c1a44673c778")
 CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
 CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
 
@@ -72,7 +72,7 @@ NODE_RETURN_FIELDS = {
 }
 # ====== Milvus 配置 ==================
 MILVUS_HOST = os.getenv("MILVUS_HOST", "10.7.7.200")
-MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19531"))
 MILVUS_USER = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
 MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
