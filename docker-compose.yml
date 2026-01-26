@@ -16,38 +16,83 @@ services:
   neo4j-search:
     # build: .
     image: red_rag:12-04
-    restart: unless-stopped  # 添加这行
+    restart: unless-stopped
     ports:
       - "5010:5001"
     environment:
-      # neo4j 数据库设置
+      # Python 设置
       - PYTHONUNBUFFERED=1
-      - NEO4J_URI=neo4j://neo4j:7687
+      
+      # Neo4j 数据库设置
+      - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=D6gkdYMp3NrDzh
+      - NEO4J_DATABASE=neo4j
       - INDEX_NAME=mitre_acttack_index
       
       # Embedding 模型设置
-      - EMBEDDING_URL=http://10.7.7.200:8222/embeddings/bgem3
-      - EMBEDDING_TOP_K=5
+      - EMBEDDING_URL=http://10.1.1.125:14829/get_embeddings/stella
+      - EMBEDDING_API_KEY=huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876
       
       # Chat 模型设置
-      - CHAT_URL=https://api.siliconflow.cn/v1
-      - CHAT_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
-      - CHAT_MODEL_API_KEY=sk-xixodpzlalrfxhgmhxrmyykbcedfgcbmzlwhcbggcsrxzmho
+      - CHAT_URL=https://api.deepseek.com
+      - CHAT_MODEL_NAME=deepseek-chat
+      - CHAT_MODEL_API_KEY=sk-53b49f7e5a9748a58ac7c1a44673c778
       - CHAT_TEMPERATURE=0
-      - CHAT_MAX_TOKENS=30000
+      - CHAT_MAX_TOKENS=25000
+      
+      # OpenAI 模型设置
+      - OPENAI_URL=http://10.1.1.125:29000/v1
+      - OPENAI_MODEL_NAME=qwen3-coder
+      - OPENAI_TEMPERATURE=0
+      - OPENAI_MAX_TOKENS=25000
+      
+      # Rerank 模型设置
       - RERANK_URL=http://10.7.7.200:8223/rerank
-      - UPLOAD_FILE_CHUNK_URL=http://10.7.7.200:8004/submit-parse-job-from-file
-      - DOWNLOAD_FIULE_CHUNK_URL=http://10.7.7.200:8004/task-status/
+      
+      # 上传文件切块请求 URL
+      - UPLOAD_FILE_CHUNK_URL=http://10.7.7.200:8010/submit-parse-job-from-file
+      - DOWNLOAD_FILE_CHUNK_URL=http://10.7.7.200:8010/task-status/
+      
+      # 图片识别 URL
       - OCR_URL=http://10.7.7.200/ocr-image
+      
+      # Elasticsearch 配置
+      - ES_HOST=10.1.1.149
+      - ES_PORT=9200
+      - ES_AUTH_NAME=elastic
+      - ES_AUTH_PASSWORD=42cTNIjZAAMqmVd-p=q1
+      - ES_INDEX=qax_graph_rag
+      - ES_FULLTEXT_SIZE=50
+      - ES_VECTOR_SIZE=10
+      - ES_RETURN_SIZE=10
+      - ES_FULLTEXT_INDEX_FILED=description
+      - ES_VECTOR_FILED=description_embedding
+      - ES_ALPHA=0.6
+      
+      # Milvus 配置
       - MILVUS_HOST=10.7.7.200
-      - MILVUS_PORT=19530
+      - MILVUS_PORT=19531
       - MILVUS_USER=root
       - MILVUS_PASSWORD=Milvus
       - MILVUS_DB_NAME=default
-      - MILVUS_COLLECTION=es_migration
+      - MILVUS_COLLECTION=es_migration_new
       - MILVUS_CONSISTENCY_LEVEL=Bounded
       - MILVUS_SECURE=false
+      - MILVUS_FULLTEXT_INDEX_FILED=code_data
+      - MILVUS_CODE_INDEX_FILED=code_data
+      - MILVUS_VECTOR_FILED=code__embedding
+      
+      # Claude Code API Keys 配置（多个 key 用逗号分隔）
+      - CLAUDE_API_KEYS=feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o,31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz,935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3
+      
+      # Claude Code 项目路径配置
+      - CLAUDE_PROJECT_ROOT=/root/workspace/ch
+      
+      # Gitea 配置
+      - GITEA_URL=http://10.1.1.155:3000
+      - GITEA_ADMIN_USER=root
+      - GITEA_ADMIN_PASSWORD=Admin@1234
+      - GITEA_ORG_NAME=red_team_rag
     depends_on:
       - neo4j
