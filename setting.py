@@ -1,95 +1,132 @@
+"""
+应用配置：优先从 Apollo 配置中心读取，未接入或取不到时使用环境变量/默认值。
+环境变量仅保留 Apollo 相关：APOLLO_APP_ID、APOLLO_CLUSTER、APOLLO_META_SERVER。
+"""
+
 import os
 
+try:
+    from config.apollo_client import apollo_client
+except Exception:
+    apollo_client = None
+
+
+def _get(key: str, default: str = "") -> str:
+    """优先从 Apollo 获取配置，否则从环境变量或默认值"""
+    if apollo_client:
+        return apollo_client.get_value(key, default=default)
+    return os.getenv(key, default)
+
+
 # neo4j 数据库设置
-NEO4J_URI = os.getenv('NEO4J_URI', "bolt://10.7.7.200:7687")
-NEO4J_USER = os.getenv('NEO4J_USER', "neo4j")
-NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD', "D6gkdYMp3NrDzh")
-NEO4J_DATABASE = os.getenv('NEO4J_DATABASE', "neo4j")  # 数据库名称，默认使用已有的 test 库
-INDEX_NAME = os.getenv('INDEX_NAME', "mitre_acttack_index")
+NEO4J_URI = _get("NEO4J_URI", "bolt://10.7.7.200:7687")
+NEO4J_USER = _get("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = _get("NEO4J_PASSWORD", "D6gkdYMp3NrDzh")
+NEO4J_DATABASE = _get("NEO4J_DATABASE", "neo4j")
+INDEX_NAME = _get("INDEX_NAME", "mitre_acttack_index")
 
 # Embedding 模型设置
-EMBEDDING_URL = os.getenv('EMBEDDING_URL', "http://10.1.1.125:14829/get_embeddings/stella")
-# EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', "BAAI/bge-m3")
-EMBEDDING_API_KEY = os.getenv('EMBEDDING_API_KEY', "huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876")
-# EMBEDDING_TOP_K = int(os.getenv('EMBEDDING_TOP_K', "5"))
+EMBEDDING_URL = _get("EMBEDDING_URL", "http://10.1.1.125:14829/get_embeddings/stella")
+EMBEDDING_API_KEY = _get(
+    "EMBEDDING_API_KEY", "huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876"
+)
 
 # Chat 模型设置
-CHAT_URL = os.getenv('CHAT_URL', "https://api.deepseek.com")
-CHAT_MODEL_NAME = os.getenv('CHAT_MODEL_NAME', "deepseek-chat")
-CHAT_MODEL_API_KEY = os.getenv('CHAT_MODEL_API_KEY', "sk-53b49f7e5a9748a58ac7c1a44673c778")
-CHAT_TEMPERATURE = float(os.getenv('CHAT_TEMPERATURE', "0"))
-CHAT_MAX_TOKENS = int(os.getenv('CHAT_MAX_TOKENS', "25000"))
+CHAT_URL = _get("CHAT_URL", "https://api.deepseek.com")
+CHAT_MODEL_NAME = _get("CHAT_MODEL_NAME", "deepseek-chat")
+CHAT_MODEL_API_KEY = _get("CHAT_MODEL_API_KEY", "sk-53b49f7e5a9748a58ac7c1a44673c778")
+CHAT_TEMPERATURE = float(_get("CHAT_TEMPERATURE", "0"))
+CHAT_MAX_TOKENS = int(_get("CHAT_MAX_TOKENS", "25000"))
 
 # OpenAI 模型设置
-OPENAI_URL = os.getenv('OPENAI_URL', "http://10.1.1.125:29000/v1")
-OPENAI_MODEL_NAME = os.getenv('OPENAI_MODEL_NAME', "qwen3-coder")
-OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', "0"))
-OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', "25000"))
+OPENAI_URL = _get("OPENAI_URL", "http://10.1.1.125:29000/v1")
+OPENAI_MODEL_NAME = _get("OPENAI_MODEL_NAME", "qwen3-coder")
+OPENAI_TEMPERATURE = float(_get("OPENAI_TEMPERATURE", "0"))
+OPENAI_MAX_TOKENS = int(_get("OPENAI_MAX_TOKENS", "25000"))
 
 # rerank 模型设置
-RERANK_URL = os.getenv('RERANK_URL', "http://10.7.7.200:8223/rerank")
+RERANK_URL = _get("RERANK_URL", "http://10.7.7.200:8223/rerank")
 # 上传文件切块请求 url
-UPLOAD_FILE_CHUNK_URL = os.getenv('UPLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8010/submit-parse-job-from-file")
-DOWNLOAD_FILE_CHUNK_URL = os.getenv('DOWNLOAD_FILE_CHUNK_URL', "http://10.7.7.200:8010/task-status/")
+UPLOAD_FILE_CHUNK_URL = _get(
+    "UPLOAD_FILE_CHUNK_URL", "http://10.7.7.200:8010/submit-parse-job-from-file"
+)
+DOWNLOAD_FILE_CHUNK_URL = _get(
+    "DOWNLOAD_FILE_CHUNK_URL", "http://10.7.7.200:8010/task-status/"
+)
 # 图片识别 url
-OCR_URL = os.getenv('OCR_URL', "http://10.7.7.200/ocr-image")
+OCR_URL = _get("OCR_URL", "http://10.7.7.200/ocr-image")
 
+# ====== ES 配置 ==================
+ES_HOST = _get("ES_HOST", "10.1.1.149")
+ES_PORT = int(_get("ES_PORT", "9200"))
+ES_AUTH_NAME = _get("ES_AUTH_NAME", "elastic")
+ES_AUTH_PASSWORD = _get("ES_AUTH_PASSWORD", "42cTNIjZAAMqmVd-p=q1")
+ES_INDEX = _get("ES_INDEX", "qax_graph_rag")
+ES_FULLTEXT_SIZE = int(_get("ES_FULLTEXT_SIZE", "50"))
+ES_VECTOR_SIZE = int(_get("ES_VECTOR_SIZE", "10"))
+ES_RETURN_SIZE = int(_get("ES_RETURN_SIZE", "10"))
+ES_FULLTEXT_INDEX_FILED = _get("ES_FULLTEXT_INDEX_FILED", "description")
+ES_VECTOR_FILED = _get("ES_VECTOR_FILED", "description_embedding")
+ES_ALPHA = float(_get("ES_ALPHA", "0.6"))
 
-
-
-# ====== ES 配置==================
-# ip、端口、身份验证设置
-ES_HOST = os.getenv('ES_HOST', "10.1.1.149")
-ES_PORT = int(os.getenv('ES_PORT', 9200))
-ES_AUTH_NAME = os.getenv('ES_AUTH_NAME', "elastic")
-ES_AUTH_PASSWORD =  os.getenv('ES_AUTH_PASSWORD', "42cTNIjZAAMqmVd-p=q1")
-# es 这个项目使用的索引 
-ES_INDEX = os.getenv('ES_INDEX', "qax_graph_rag")
-# es 这两种索引方式返回的数据量 
-ES_FULLTEXT_SIZE = int(os.getenv('ES_FULLTEXT_SIZE', 50))
-ES_VECTOR_SIZE = int(os.getenv('ES_VECTOR_SIZE', 10))
-# es 混合搜索的时候最终返回的数据条目
-ES_RETURN_SIZE = int(os.getenv('ES_RETURN_SIZE', 10))
-# es 全文索引、和向量索引字段
-ES_FULLTEXT_INDEX_FILED =  os.getenv('ES_FULLTEXT_INDEX_FILED', "description")
-ES_VECTOR_FILED = os.getenv('ES_VECTOR_FILED', "description_embedding")
-# es 全文索引结果和向量搜索结果的权重数值
-ES_ALPHA = float(os.getenv('ES_ALPHA', 0.6))
-
-# 图谱查询的节点字段
+# 图谱查询的节点字段（固定结构，一般不需按环境变更）
 NODE_RETURN_FIELDS = {
-    "MitreAttackArticleChunk": ["description", "source_url","repo_url"],
-    "MitreAttackArticleDocument": ["insert_type", "procedure_examples_id", "procedure_examples_name", "source_url", "title","repo_url"],
-    "MitreAttackCampaign": ["description", "attack_id", "attack_first_seen_citation", "attack_last_seen_citation", "name", "ref_url"],
-    "MitreAttackCodeSoftware": ["description", "name","repo_url"],
-    "MitreAttackCodeSoftwareCodeChunk": ["description", "technique_id", "code_data","repo_url"],
+    "MitreAttackArticleChunk": ["description", "source_url", "repo_url"],
+    "MitreAttackArticleDocument": [
+        "insert_type",
+        "procedure_examples_id",
+        "procedure_examples_name",
+        "source_url",
+        "title",
+        "repo_url",
+    ],
+    "MitreAttackCampaign": [
+        "description",
+        "attack_id",
+        "attack_first_seen_citation",
+        "attack_last_seen_citation",
+        "name",
+        "ref_url",
+    ],
+    "MitreAttackCodeSoftware": ["description", "name", "repo_url"],
+    "MitreAttackCodeSoftwareCodeChunk": [
+        "description",
+        "technique_id",
+        "code_data",
+        "repo_url",
+    ],
     "MitreAttackDataComponent": ["description", "name"],
     "MitreAttackDataSource": ["attack_id", "description", "name", "ref_url"],
     "MitreAttackGroup": ["attack_id", "description", "name", "ref_url"],
     "MitreAttackMitigation": ["attack_id", "description", "name", "ref_url"],
-    "MitreAttackTactic": ["attack_id", "attack_shortname", "description", "name", "ref_url"],
-    "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url"]
+    "MitreAttackTactic": [
+        "attack_id",
+        "attack_shortname",
+        "description",
+        "name",
+        "ref_url",
+    ],
+    "MitreAttackTechnique": ["attack_id", "description", "name", "ref_url"],
 }
+
 # ====== Milvus 配置 ==================
-MILVUS_HOST = os.getenv("MILVUS_HOST", "10.7.7.200")
-MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19531"))
-MILVUS_USER = os.getenv("MILVUS_USER", "root")
-MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "Milvus")
-MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "default")
-MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "es_migration_new")
-MILVUS_CONSISTENCY_LEVEL = os.getenv("MILVUS_CONSISTENCY_LEVEL", "Bounded")
-MILVUS_SECURE = os.getenv("MILVUS_SECURE", "false").lower() == "true"
-MILVUS_FULLTEXT_INDEX_FILED = os.getenv("MILVUS_FULLTEXT_INDEX_FILED", "code_data")
-MILVUS_CODE_INDEX_FILED = os.getenv("MILVUS_CODE_INDEX_FILED", "code_data")
-MILVUS_VECTOR_FILED = os.getenv("MILVUS_VECTOR_FILED", "code__embedding")
+MILVUS_HOST = _get("MILVUS_HOST", "10.7.7.200")
+MILVUS_PORT = int(_get("MILVUS_PORT", "19531"))
+MILVUS_USER = _get("MILVUS_USER", "root")
+MILVUS_PASSWORD = _get("MILVUS_PASSWORD", "Milvus")
+MILVUS_DB_NAME = _get("MILVUS_DB_NAME", "default")
+MILVUS_COLLECTION = _get("MILVUS_COLLECTION", "es_migration_new")
+MILVUS_CONSISTENCY_LEVEL = _get("MILVUS_CONSISTENCY_LEVEL", "Bounded")
+MILVUS_SECURE = _get("MILVUS_SECURE", "false").lower() == "true"
+MILVUS_FULLTEXT_INDEX_FILED = _get("MILVUS_FULLTEXT_INDEX_FILED", "code_data")
+MILVUS_CODE_INDEX_FILED = _get("MILVUS_CODE_INDEX_FILED", "code_data")
+MILVUS_VECTOR_FILED = _get("MILVUS_VECTOR_FILED", "code__embedding")
 
 # ====== Claude Code API Keys 配置 ==================
-# Claude API Keys (号池)，多个 key 用逗号分隔
-CLAUDE_API_KEYS_STR = os.getenv('CLAUDE_API_KEYS', '')
+CLAUDE_API_KEYS_STR = _get("CLAUDE_API_KEYS", "")
 if CLAUDE_API_KEYS_STR:
-    CLAUDE_API_KEYS = [k.strip() for k in CLAUDE_API_KEYS_STR.split(',') if k.strip()]
+    CLAUDE_API_KEYS = [k.strip() for k in CLAUDE_API_KEYS_STR.split(",") if k.strip()]
 else:
-    # 默认 keys
     CLAUDE_API_KEYS = [
         "feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o",
         "31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz",
@@ -97,12 +134,13 @@ else:
     ]
 
 # ====== Claude Code 项目路径配置 ==================
-PROJECT_ROOT = os.path.abspath(os.getenv('CLAUDE_PROJECT_ROOT', "/root/workspace/ch"))
+PROJECT_ROOT = os.path.abspath(_get("CLAUDE_PROJECT_ROOT", "/root/workspace/ch"))
 UPLOAD_CODE_DIR = os.path.join(PROJECT_ROOT, "upload_code")
 
-
 # Gitea 配置
-GITEA_URL = os.getenv('GITEA_URL', 'http://10.1.1.155:3000')
-GITEA_ADMIN_USER = os.getenv('GITEA_ADMIN_USER', 'root')
-GITEA_ADMIN_PASSWORD = os.getenv('GITEA_ADMIN_PASSWORD', 'Admin@1234')
-GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')
+GITEA_URL = _get("GITEA_URL", "http://10.1.1.155:3000")
+GITEA_ADMIN_USER = _get("GITEA_ADMIN_USER", "root")
+GITEA_ADMIN_PASSWORD = _get("GITEA_ADMIN_PASSWORD", "Admin@1234")
+GITEA_ORG_NAME = _get("GITEA_ORG_NAME", "red_team_rag")
+
+TestApollo = _get("TestApollo", "false")
