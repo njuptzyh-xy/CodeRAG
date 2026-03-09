@@ -871,7 +871,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
             # 更新 software 节点的 repo_url
             if software_node:
                 session.run(
-                    "MATCH (n:MitreAttackCodeSoftware) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackCodeSoftware) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
                     element_id=software_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 Software 节点 repo_url: {software_node.element_id}")
@@ -897,7 +897,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
                     file_relative_path = pathlib.Path(matching_path).as_posix()
                     file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_relative_path}"
                     session.run(
-                        "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                        "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
                         element_id=file_node.element_id, repo_url=file_repo_url
                     )
                     print(f"[INFO] 更新 File 节点 repo_url: {file_node.element_id}")
@@ -916,7 +916,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
             # 更新 code 节点的 repo_url
             for code_node in unique_code_nodes:
                 session.run(
-                    "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
                     element_id=code_node.element_id, repo_url=file_repo_url
                 )
                 print(f"[INFO] 更新 CodeChunk 节点 repo_url: {code_node.element_id}")
@@ -994,7 +994,7 @@ def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str,
             batch_code_data = [item["code_data"] for item in batch_data]
             batch_descriptions = [item["description"] for item in batch_data]
             batch_embeddings = [item["code__embedding"] for item in batch_data]
-            batch_soft_names = [softname] * len(batch_data)  # 更新为新值
+            batch_soft_names = [item["soft_name"] for item in batch_data]
             batch_urls = [repo_url] * len(batch_data)  # 更新为新值
 
             try:
@@ -1005,7 +1005,7 @@ def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str,
                         batch_code_data,      # 保持原值
                         batch_descriptions,   # 保持原值
                         batch_embeddings,     # 保持原值
-                        batch_soft_names,     # ✨ 更新
+                        batch_soft_names,     # 保持原值
                         batch_urls,           # ✨ 更新
                     ]
                 )
@@ -1077,7 +1077,7 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
             # 更新 document 节点的 repo_url
             if document_node:
                 session.run(
-                    "MATCH (n:MitreAttackArticleDocument) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackArticleDocument) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
                     element_id=document_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 ArticleDocument 节点 repo_url: {document_node.element_id}")
@@ -1094,7 +1094,7 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
             # 更新 chunk 节点的 repo_url
             for chunk_node in unique_chunk_nodes:
                 session.run(
-                    "MATCH (n:MitreAttackArticleChunk) WHERE elementId(n) = $element_id AND n.repo_url IS NULL SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackArticleChunk) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
                     element_id=chunk_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 ArticleChunk 节点 repo_url: {chunk_node.element_id}")
@@ -1173,7 +1173,7 @@ def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname
             batch_code_data = [item["code_data"] for item in batch_data]
             batch_descriptions = [item["description"] for item in batch_data]
             batch_embeddings = [item["code__embedding"] for item in batch_data]
-            batch_soft_names = [softname] * len(batch_data)  # 更新为新值
+            batch_soft_names = [item["soft_name"] for item in batch_data]
             batch_urls = [repo_url] * len(batch_data)  # 更新为新值
 
             try:
@@ -1184,7 +1184,7 @@ def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname
                         batch_code_data,      # 保持原值
                         batch_descriptions,   # 保持原值
                         batch_embeddings,     # 保持原值
-                        batch_soft_names,     # ✨ 更新
+                        batch_soft_names,     # 保持原值
                         batch_urls,           # ✨ 更新
                     ]
                 )
@@ -1543,7 +1543,7 @@ def main():
             base_path=os.path.join(base_path, "codes"),
             org_name=org_name,
             description_template=description_template
-        )
+    )
 
 
 if __name__ == "__main__":

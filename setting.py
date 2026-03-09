@@ -19,7 +19,7 @@ def _get(key: str, default: str = "") -> str:
 
 
 # neo4j 数据库设置
-NEO4J_URI = _get("NEO4J_URI", "bolt://10.7.7.200:7687")
+NEO4J_URI = _get("NEO4J_URI", "bolt://10.7.7.200:17687")
 NEO4J_USER = _get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = _get("NEO4J_PASSWORD", "D6gkdYMp3NrDzh")
 NEO4J_DATABASE = _get("NEO4J_DATABASE", "neo4j")
@@ -111,7 +111,7 @@ NODE_RETURN_FIELDS = {
 
 # ====== Milvus 配置 ==================
 MILVUS_HOST = _get("MILVUS_HOST", "10.7.7.200")
-MILVUS_PORT = int(_get("MILVUS_PORT", "19531"))
+MILVUS_PORT = int(_get("MILVUS_PORT", "19534"))
 MILVUS_USER = _get("MILVUS_USER", "root")
 MILVUS_PASSWORD = _get("MILVUS_PASSWORD", "Milvus")
 MILVUS_DB_NAME = _get("MILVUS_DB_NAME", "default")
