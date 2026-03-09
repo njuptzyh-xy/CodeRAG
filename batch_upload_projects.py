@@ -44,7 +44,7 @@ from setting import (
 GITEA_URL = os.getenv('GITEA_URL', 'http://10.1.1.155:3000')
 GITEA_ADMIN_USER = os.getenv('GITEA_ADMIN_USER', 'root')
 GITEA_ADMIN_PASSWORD = os.getenv('GITEA_ADMIN_PASSWORD', 'Admin@1234')
-GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')
+#GITEA_ORG_NAME = os.getenv('GITEA_ORG_NAME', 'red_team_rag')
 
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 SESSION_KWARGS = {"database": NEO4J_DATABASE}
@@ -381,7 +381,7 @@ def handle_reponame(file_name: str) -> str:
     return repo_name
 
 def upload_file_to_gitea(
-    file_path: str, repo_name: str, description: str = "", service: Optional[GiteaService] = None
+    file_path: str, repo_name: str, description: str = "", service: Optional[GiteaService] = None, org_name: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     将单个文件上传到 Gitea 并返回仓库的 web_url
@@ -416,8 +416,8 @@ def upload_file_to_gitea(
                 print("[FAIL] [upload_file_to_gitea] 认证失败")
                 return None, None
         # 确保组织存在
-        if not service.ensure_org_exists(GITEA_ORG_NAME):
-            print(f"[FAIL] [upload_file_to_gitea] 无法确保组织存在: {GITEA_ORG_NAME}")
+        if not service.ensure_org_exists(org_name):
+            print(f"[FAIL] [upload_file_to_gitea] 无法确保组织存在: {org_name}")
             return None, None
 
         # 创建仓库
@@ -426,7 +426,7 @@ def upload_file_to_gitea(
             description=description,
             private=False,
             auto_init=False,
-            org_name=GITEA_ORG_NAME,
+            org_name=org_name,
         )
 
         if not repo_info:
@@ -441,7 +441,7 @@ def upload_file_to_gitea(
 
         print(f"[INFO] [upload_file_to_gitea] 开始上传文件到仓库...")
         print(f"[INFO] [upload_file_to_gitea] 源文件: {file_path}")
-        print(f"[INFO] [upload_file_to_gitea] 仓库: {GITEA_ORG_NAME}/{repo_name}")
+        print(f"[INFO] [upload_file_to_gitea] 仓库: {org_name}/{repo_name}")
 
         # 在文件所在目录下创建一个唯一的临时目录，用于 git 操作
         # 使用时间戳 + UUID 确保唯一性，不删除目录（避免 Windows 删除文件占用问题）
@@ -679,7 +679,7 @@ def upload_folder_to_gitea(
             return None, None
 
     # 确定组织名称
-    target_org_name = org_name or GITEA_ORG_NAME
+    target_org_name = org_name
 
     # 确保组织存在
     if target_org_name:
@@ -722,6 +722,15 @@ def upload_folder_to_gitea(
             # 初始化 git 仓库
             print("[INFO] 初始化 Git 仓库...")
             subprocess.run(['git', 'init'], check=True, capture_output=True)
+
+        # 配置 git 用户信息（避免 Author identity unknown 导致 commit 失败）
+        subprocess.run(
+            ['git', 'config', 'user.name', service.username], capture_output=True
+        )
+        subprocess.run(
+            ['git', 'config', 'user.email', f'{service.username}@gitea.local'],
+            capture_output=True,
+        )
 
         # 添加所有文件
         print("[INFO] 添加文件到 Git...")
@@ -871,7 +880,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
             # 更新 software 节点的 repo_url
             if software_node:
                 session.run(
-                    "MATCH (n:MitreAttackCodeSoftware) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackCodeSoftware) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                     element_id=software_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 Software 节点 repo_url: {software_node.element_id}")
@@ -897,7 +906,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
                     file_relative_path = pathlib.Path(matching_path).as_posix()
                     file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_relative_path}"
                     session.run(
-                        "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
+                        "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                         element_id=file_node.element_id, repo_url=file_repo_url
                     )
                     print(f"[INFO] 更新 File 节点 repo_url: {file_node.element_id}")
@@ -916,7 +925,7 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
             # 更新 code 节点的 repo_url
             for code_node in unique_code_nodes:
                 session.run(
-                    "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackCodeSoftwareCodeChunk) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                     element_id=code_node.element_id, repo_url=file_repo_url
                 )
                 print(f"[INFO] 更新 CodeChunk 节点 repo_url: {code_node.element_id}")
@@ -930,12 +939,12 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
 
 def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str, repo_url: str) -> bool:
     """
-    根据 Neo4j 的 CodeChunk element_id 更新 Milvus 中对应记录的 soft_name 和 url
+    根据 Neo4j 的 CodeChunk element_id 更新 Milvus 中对应记录的 url（仅 url，其他字段保持原值）
 
     Args:
         code_chunk_element_ids: Neo4j 中 MitreAttackCodeSoftwareCodeChunk 节点的 element_id 列表
-        softname: 软件名称,将更新到 Milvus 的 soft_name 字段
-        repo_url: 仓库 URL,将更新到 Milvus 的 url 字段
+        softname: 软件名称（仅用于日志展示，不写入 Milvus）
+        repo_url: 仓库 URL，将更新到 Milvus 的 url 字段
 
     Returns:
         成功返回 True,失败返回 False
@@ -982,23 +991,23 @@ def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str,
             traceback.print_exc()
             return False
 
-        # 步骤3: 批量更新 - 只修改 soft_name 和 url,其他字段保持原值
+        # 步骤3: 批量更新 - 只修改 url，其他字段全部保持原值
         success_count = 0
         BATCH_SIZE = 100
 
         for i in range(0, len(result), BATCH_SIZE):
             batch_data = result[i:i + BATCH_SIZE]
 
-            # 提取所有字段,只修改 soft_name 和 url
+            # 提取所有字段，仅 url 更新为新值，其余保持原值
             batch_neo4j_ids = [item["neo4j_id"] for item in batch_data]
             batch_code_data = [item["code_data"] for item in batch_data]
             batch_descriptions = [item["description"] for item in batch_data]
             batch_embeddings = [item["code__embedding"] for item in batch_data]
-            batch_soft_names = [item["soft_name"] for item in batch_data]
-            batch_urls = [repo_url] * len(batch_data)  # 更新为新值
+            batch_soft_names = [item["soft_name"] for item in batch_data]  # 保持原值
+            batch_urls = [repo_url] * len(batch_data)  # 仅更新 url
 
             try:
-                # upsert 必须提供所有字段,但我们只修改 soft_name 和 url
+                # upsert 必须提供所有字段，仅 url 为更新值
                 collection.upsert(
                     data=[
                         batch_neo4j_ids,      # 主键
@@ -1006,7 +1015,7 @@ def add_milvus_from_code_chunk(code_chunk_element_ids: List[str], softname: str,
                         batch_descriptions,   # 保持原值
                         batch_embeddings,     # 保持原值
                         batch_soft_names,     # 保持原值
-                        batch_urls,           # ✨ 更新
+                        batch_urls,           # ✨ 仅更新 url
                     ]
                 )
                 success_count += len(batch_neo4j_ids)
@@ -1077,7 +1086,7 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
             # 更新 document 节点的 repo_url
             if document_node:
                 session.run(
-                    "MATCH (n:MitreAttackArticleDocument) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackArticleDocument) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                     element_id=document_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 ArticleDocument 节点 repo_url: {document_node.element_id}")
@@ -1094,7 +1103,7 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
             # 更新 chunk 节点的 repo_url
             for chunk_node in unique_chunk_nodes:
                 session.run(
-                    "MATCH (n:MitreAttackArticleChunk) WHERE elementId(n) = $element_id  SET n.repo_url = $repo_url",
+                    "MATCH (n:MitreAttackArticleChunk) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                     element_id=chunk_node.element_id, repo_url=repo_url
                 )
                 print(f"[INFO] 更新 ArticleChunk 节点 repo_url: {chunk_node.element_id}")
@@ -1109,12 +1118,12 @@ def update_repo_url_for_file(repo_url: str, document_name: str) -> List[str]:
 
 def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname: str, repo_url: str) -> bool:
     """
-    根据 Neo4j 的 ArticleChunk element_id 更新 Milvus 中对应记录的 soft_name 和 url
+    根据 Neo4j 的 ArticleChunk element_id 更新 Milvus 中对应记录的 url（仅 url，其他字段保持原值）
 
     Args:
         article_chunk_element_ids: Neo4j 中 MitreAttackArticleChunk 节点的 element_id 列表
-        softname: 软件名称,将更新到 Milvus 的 soft_name 字段
-        repo_url: 仓库 URL,将更新到 Milvus 的 url 字段
+        softname: 软件名称（仅用于日志展示，不写入 Milvus）
+        repo_url: 仓库 URL，将更新到 Milvus 的 url 字段
 
     Returns:
         成功返回 True,失败返回 False
@@ -1161,23 +1170,23 @@ def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname
             traceback.print_exc()
             return False
 
-        # 步骤2: 批量更新 - 只修改 soft_name 和 url,其他字段保持原值
+        # 步骤2: 批量更新 - 只修改 url，其他字段全部保持原值
         success_count = 0
         BATCH_SIZE = 100
 
         for i in range(0, len(result), BATCH_SIZE):
             batch_data = result[i:i + BATCH_SIZE]
 
-            # 提取所有字段,只修改 soft_name 和 url
+            # 提取所有字段，仅 url 更新为新值，其余保持原值
             batch_neo4j_ids = [item["neo4j_id"] for item in batch_data]
             batch_code_data = [item["code_data"] for item in batch_data]
             batch_descriptions = [item["description"] for item in batch_data]
             batch_embeddings = [item["code__embedding"] for item in batch_data]
-            batch_soft_names = [item["soft_name"] for item in batch_data]
-            batch_urls = [repo_url] * len(batch_data)  # 更新为新值
+            batch_soft_names = [item["soft_name"] for item in batch_data]  # 保持原值
+            batch_urls = [repo_url] * len(batch_data)  # 仅更新 url
 
             try:
-                # upsert 必须提供所有字段,但我们只修改 soft_name 和 url
+                # upsert 必须提供所有字段，仅 url 为更新值
                 collection.upsert(
                     data=[
                         batch_neo4j_ids,      # 主键
@@ -1185,7 +1194,7 @@ def add_milvus_from_article_chunk(article_chunk_element_ids: List[str], softname
                         batch_descriptions,   # 保持原值
                         batch_embeddings,     # 保持原值
                         batch_soft_names,     # 保持原值
-                        batch_urls,           # ✨ 更新
+                        batch_urls,           # ✨ 仅更新 url
                     ]
                 )
                 success_count += len(batch_neo4j_ids)
@@ -1300,7 +1309,7 @@ def batch_upload_folders_code(
             continue
         code_chunk_element_ids, msg = update_repo_url(repo_url, folder_name, branch_name, all_files)
         if msg == "文件名重复":
-            duplicate_repos.append(folder_name)
+            duplicate_repos.append({"project_name": folder_name, "folder_path": folder_path})
             continue
         if not code_chunk_element_ids:
             print(f"[FAIL] 更新仓库 URL 失败: {folder_name}")
@@ -1327,8 +1336,27 @@ def batch_upload_folders_code(
 
         print(f"[{'OK' if repo_url else 'FAIL'}] {folder_name}: {'成功' if repo_url else '失败'}")
     if duplicate_repos:
+        # 将有同名文件的项目记录到 CSV 文件
+        csv_filename = os.path.join(
+            base_path,
+            f"duplicate_projects_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        import csv
+        try:
+            with open(csv_filename, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=["project_name", "folder_path", "reason"])
+                writer.writeheader()
+                for item in duplicate_repos:
+                    writer.writerow({
+                        "project_name": item["project_name"],
+                        "folder_path": item["folder_path"],
+                        "reason": "文件名重复",
+                    })
+            print(f"[INFO] 已将有同名文件的项目记录到: {csv_filename}")
+        except Exception as e:
+            print(f"[WARN] 写入 CSV 失败: {e}")
         print(f"[FAIL] 存在项目中的文件名重复情况, 共有 {len(duplicate_repos)} 个重复项目。这些项目不适用于批量上传，需要重新被知识库进行处理")
-        print(f"重复项目名: {duplicate_repos}")
+        print(f"重复项目名: {[item['project_name'] for item in duplicate_repos]}")
         return {}
 
     # 打印总结
@@ -1417,7 +1445,8 @@ def batch_upload_folders_file(
             file_path=file_path,
             repo_name=repo_name,  # 使用原始文件夹名作为仓库名
             description=description,
-            service=service
+            service=service,
+            org_name=org_name
         )
         if not repo_url or not branch_name:
             print(f"[FAIL] 上传失败: {file_name}")
@@ -1508,29 +1537,33 @@ def main():
         print(f"组织名称: {org_name}")
     print(f"描述模板: {description_template}")
     print("=" * 80)
-    import tarfile
+    import zipfile
     import glob
 
     codes_path = os.path.join(base_path, "codes")
 
-    # 解压 codes 文件夹下所有 .tar.gz 压缩包
+    # 解压 codes 文件夹下所有 .zip 压缩包，每个 zip 解压到以 zip 文件名命名的子目录
+    # 保证每个项目有独立文件夹，便于 get_subfolders 扫描并作为 Git 上传的工作目录
     if os.path.exists(codes_path) and os.path.isdir(codes_path):
-        tar_files = glob.glob(os.path.join(codes_path, "*.tar.gz"))
-        for tar_file in tar_files:
+        zip_files = glob.glob(os.path.join(codes_path, "*.zip"))
+        for zip_file in zip_files:
             try:
-                print(f"[INFO] 解压: {tar_file}")
-                with tarfile.open(tar_file, "r:gz") as tar:
-                    tar.extractall(path=codes_path)
-                print(f"[OK] 解压完成: {os.path.basename(tar_file)}")
+                folder_name = os.path.splitext(os.path.basename(zip_file))[0]
+                extract_dir = os.path.join(codes_path, folder_name)
+                os.makedirs(extract_dir, exist_ok=True)
+                print(f"[INFO] 解压: {zip_file} -> {extract_dir}")
+                with zipfile.ZipFile(zip_file, "r") as zf:
+                    zf.extractall(path=extract_dir)
+                print(f"[OK] 解压完成: {os.path.basename(zip_file)}")
             except Exception as e:
-                print(f"[FAIL] 解压失败: {os.path.basename(tar_file)}，原因: {e}")
+                print(f"[FAIL] 解压失败: {os.path.basename(zip_file)}，原因: {e}")
         # 删除所有压缩包文件
-        for tar_file in tar_files:
+        for zip_file in zip_files:
             try:
-                os.remove(tar_file)
-                print(f"[INFO] 已删除压缩包: {os.path.basename(tar_file)}")
+                os.remove(zip_file)
+                print(f"[INFO] 已删除压缩包: {os.path.basename(zip_file)}")
             except Exception as e:
-                print(f"[FAIL] 删除压缩包失败: {os.path.basename(tar_file)}，原因: {e}")
+                print(f"[FAIL] 删除压缩包失败: {os.path.basename(zip_file)}，原因: {e}")
     else:
         print(f"[WARN] 未找到 codes 文件夹: {codes_path}")
 
@@ -1543,7 +1576,7 @@ def main():
             base_path=os.path.join(base_path, "codes"),
             org_name=org_name,
             description_template=description_template
-    )
+        )
 
 
 if __name__ == "__main__":
