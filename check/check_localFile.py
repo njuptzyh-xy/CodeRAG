@@ -27,8 +27,8 @@ FILE_DIR = r"D:\HuaQingWeiYang\RedTeamData\File"  # 上传的文件
 # 一致性检查 CSV 路径
 CSV_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "20260304_145233",
-    "consistency_check_20260304_145233.csv",
+   "20260309_182702",
+    "consistency_check_20260309_182702.csv",
 )
 
 # code 目录支持的压缩包扩展名

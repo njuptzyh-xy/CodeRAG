@@ -19,8 +19,8 @@ from database_helper.neo4j_helper import Neo4jHelper
 # 结果要追加到的 CSV 路径（相对于本脚本所在目录）
 OUTPUT_CSV = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "20260304_145233",
-    "consistency_check_20260304_145233.csv",
+    "20260309_182702",
+    "consistency_check_20260309_182702.csv",
 )
 
 
