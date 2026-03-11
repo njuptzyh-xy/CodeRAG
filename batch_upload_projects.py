@@ -904,7 +904,8 @@ def update_repo_url(repo_url: str, software_name: str, branch_name: str, all_fil
                         break
                 if matching_path:
                     file_relative_path = pathlib.Path(matching_path).as_posix()
-                    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{file_relative_path}"
+                    encoded_path = quote(file_relative_path, safe='/')  # 保留 /，编码 #、空格 等
+                    file_repo_url = f"{repo_url}/src/branch/{branch_name}/{encoded_path}"
                     session.run(
                         "MATCH (n:MitreAttackCodeSoftwareFile) WHERE elementId(n) = $element_id SET n.repo_url = $repo_url",
                         element_id=file_node.element_id, repo_url=file_repo_url

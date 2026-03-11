@@ -5,7 +5,6 @@ from routes.neo4j_route import neo4j_route
 from routes.upload_file_route import upload_file_route
 from routes.health_route import health_route
 from prometheus import setup_metrics
-from setting import TestApollo
 
 
 def create_app():
@@ -27,7 +26,6 @@ def register_routes(app):
 if __name__ == "__main__":
     # 本地运行代码
     app = create_app()
-    print(TestApollo)
     config = dict(
         host="0.0.0.0",
         port=5010,
