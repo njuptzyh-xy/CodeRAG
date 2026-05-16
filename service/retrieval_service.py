@@ -1,6 +1,7 @@
 import json
 import requests
 from database_helper.neo4j_helper import Neo4jHelper
+from database_helper.milvus_helper import MilvusHelper
 from openai import OpenAI
 from setting import (
     CHAT_MODEL_NAME,
@@ -12,7 +13,6 @@ from setting import (
     EMBEDDING_URL,
     EMBEDDING_API_KEY,
 )
-from database_helper.es_helper import ESHelper
 from utils.prompts import get_prompts
 from red_kbs_analyzer.run_logs.logger import logger
 
@@ -76,7 +76,7 @@ class RetrievalRoute:
         self.model_temperature = CHAT_TEMPERATURE  # 模型温度
         self.model_max_tokens = CHAT_MAX_TOKENS  # 模型最大 token
         self.return_results_json = True  # 是否返回 json 格式
-        self.es = ESHelper()  # es 初始化
+        self.milvus = MilvusHelper()
         self.neo4j_drive = Neo4jHelper()  # neo4j 初始化
         self.question = question  # 问题
         self.question_embedding = self._get_question_embedding()  # 问题向量
@@ -178,17 +178,15 @@ class RetrievalRoute:
     def hybrid_search(self):
         final_result = []
 
-        # 调用向量检索（已移除全文检索和融合逻辑）
-        es_data = self.es.search_by_calculate_similarity(self.question_embedding)
+        milvus_data = self.milvus.search_by_vector_similarity(self.question_embedding)
 
-        # 接下来进行 neo4j 的数据收集和返回
-        for es_item in es_data:
-            es_item_neo4j_id = es_item["source"].get("neo4j_id")
-            if not es_item_neo4j_id:
-                print(f"警告: 跳过缺失 neo4j_id 的结果: {es_item}")
+        for item in milvus_data:
+            neo4j_id = item["source"].get("neo4j_id")
+            if not neo4j_id:
+                print(f"警告: 跳过缺失 neo4j_id 的结果: {item}")
                 continue
-            node_data = self.neo4j_drive.get_single_point_data(es_item_neo4j_id)
-            if node_data:  # 添加空值检查
+            node_data = self.neo4j_drive.get_single_point_data(neo4j_id)
+            if node_data:
                 final_result.append(node_data)
         print("============================\n", final_result)
         return final_result
@@ -198,28 +196,21 @@ class RetrievalRoute:
         question = self.query_extend()
         question_embedding_data = CustomOpenAIEmbeddings().embed_query(question)
 
-        # 这里是之前的逻辑，就是查两跳的逻辑
-        es_data = self.es.search_by_calculate_similarity(question_embedding_data)
-        if len(es_data) > 0:
-            # 进行重排模型重排
-            # print("es_data=================\n", es_data)
+        milvus_data = self.milvus.search_by_vector_similarity(question_embedding_data)
+        if len(milvus_data) > 0:
             neo4j_code_data_list = [
-                es_data_item.get("source").get("code_data") for es_data_item in es_data
+                item.get("source").get("code_data") for item in milvus_data
             ]
-            # print("neo4j_code_data_list=================\n", neo4j_code_data_list)
             rank_index_result_list = self.send_rerank_request(
                 neo4j_code_data_list, top_k=3
             )
 
-            # 重排结果进行梳理，将这几个结点 id 进行整理
             neo4j_id_list = []
             for rank_index in rank_index_result_list:
-                # neo4j_id_list.append(es_data[rank_index].get("id"))
                 neo4j_id_list.append(
-                    es_data[rank_index].get("source", {}).get("neo4j_id")
+                    milvus_data[rank_index].get("source", {}).get("neo4j_id")
                 )
 
-            # 整理好的 id 进行 延伸查询
             neo4j_search_result = self.neo4j_drive.expansion_search(neo4j_id_list)
             return neo4j_search_result
         else:
@@ -234,21 +225,18 @@ class RetrievalRoute:
         对每个问题进行两次检索（纯向量 + 混合），合并结果后重排返回。
 
         流程：
-        1. search_by_calculate_similarity：纯向量检索
-        2. es.hybrid_search：向量 + BM25 混合检索
+        1. search_by_vector_similarity：纯向量检索
+        2. milvus.hybrid_search：向量 + BM25 混合检索
         3. 按 doc id 合并去重
         4. 送入重排模型取 top_k
         5. 根据重排结果获取 Neo4j 节点数据返回
         """
-        # 1. 纯向量检索
-        vector_results = self.es.search_by_calculate_similarity(self.question_embedding)
+        vector_results = self.milvus.search_by_vector_similarity(self.question_embedding)
 
-        # 2. 混合检索（向量 + BM25）
-        hybrid_results = self.es.hybrid_search(
+        hybrid_results = self.milvus.hybrid_search(
             text_query=self.question, vector=self.question_embedding
         )
 
-        # 3. 合并去重（以 id 为 key，优先保留先出现的）
         merged_by_id = {}
         for item in vector_results:
             doc_id = item.get("id")
@@ -264,7 +252,6 @@ class RetrievalRoute:
             print("TestSearch: 两次检索均无结果")
             return []
 
-        # 4. 准备重排：提取 code_data
         neo4j_code_data_list = [
             item.get("source", {}).get("code_data", "") for item in merged_list
         ]
@@ -273,7 +260,6 @@ class RetrievalRoute:
             neo4j_code_data_list, top_k=top_k
         )
 
-        # 5. 根据重排索引取 top 结果，拉取 Neo4j 节点数据
         final_result = []
         for rank_index in rank_index_result_list:
             if 0 <= rank_index < len(merged_list):
@@ -293,9 +279,6 @@ class RetrievalRoute:
         search_strategy = self.judge_retrieval_route()
 
         print("=================\n", search_strategy)
-        # 有了策略之后进行分函数处理,
-        # hybrid_search 向量检索， graph_query 生成语句检索， vector_expansion 向量比对两跳查询
-        #result = self.strategy_dict.get(search_strategy)()
         logger.info("使用TestSearch方法进行检索")
         result = self.TestSearch()
 

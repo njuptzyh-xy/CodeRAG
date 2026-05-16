@@ -57,19 +57,6 @@ services:
       # 图片识别 URL
       - OCR_URL=http://10.7.7.200/ocr-image
       
-      # Elasticsearch 配置
-      - ES_HOST=10.1.1.149
-      - ES_PORT=9200
-      - ES_AUTH_NAME=elastic
-      - ES_AUTH_PASSWORD=42cTNIjZAAMqmVd-p=q1
-      - ES_INDEX=qax_graph_rag
-      - ES_FULLTEXT_SIZE=50
-      - ES_VECTOR_SIZE=10
-      - ES_RETURN_SIZE=10
-      - ES_FULLTEXT_INDEX_FILED=description
-      - ES_VECTOR_FILED=description_embedding
-      - ES_ALPHA=0.6
-      
       # Milvus 配置
       - MILVUS_HOST=10.7.7.200
       - MILVUS_PORT=19531
@@ -82,6 +69,10 @@ services:
       - MILVUS_FULLTEXT_INDEX_FILED=code_data
       - MILVUS_CODE_INDEX_FILED=code_data
       - MILVUS_VECTOR_FILED=code__embedding
+      - MILVUS_FULLTEXT_SIZE=50
+      - MILVUS_VECTOR_SIZE=10
+      - MILVUS_RETURN_SIZE=10
+      - MILVUS_HYBRID_ALPHA=0.6
       
       # Claude Code API Keys 配置（多个 key 用逗号分隔）
       - CLAUDE_API_KEYS=feb3a0948a184509bad92e479d255647.HNv6D8wSoml1Da5o,31a5536a55114d2287e665a08c4f27e1.Ncmlk0cQ16RflsBz,935ec0bffaa343c5a25ade89a4b96230.3N0NwmxiKwW6tMV3

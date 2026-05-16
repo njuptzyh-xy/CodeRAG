@@ -46,19 +46,6 @@ DOWNLOAD_FILE_CHUNK_URL = _get(
 # 图片识别 url
 OCR_URL = _get("OCR_URL", "http://10.7.7.200/ocr-image")
 
-# ====== ES 配置 ==================
-ES_HOST = _get("ES_HOST", "10.1.1.149")
-ES_PORT = int(_get("ES_PORT", "9200"))
-ES_AUTH_NAME = _get("ES_AUTH_NAME", "elastic")
-ES_AUTH_PASSWORD = _get("ES_AUTH_PASSWORD", "42cTNIjZAAMqmVd-p=q1")
-ES_INDEX = _get("ES_INDEX", "qax_graph_rag")
-ES_FULLTEXT_SIZE = int(_get("ES_FULLTEXT_SIZE", "50"))
-ES_VECTOR_SIZE = int(_get("ES_VECTOR_SIZE", "10"))
-ES_RETURN_SIZE = int(_get("ES_RETURN_SIZE", "10"))
-ES_FULLTEXT_INDEX_FILED = _get("ES_FULLTEXT_INDEX_FILED", "description")
-ES_VECTOR_FILED = _get("ES_VECTOR_FILED", "description_embedding")
-ES_ALPHA = float(_get("ES_ALPHA", "0.6"))
-
 # 图谱查询的节点字段（固定结构，一般不需按环境变更）
 NODE_RETURN_FIELDS = {
     "MitreAttackArticleChunk": ["description", "source_url", "repo_url"],
@@ -111,6 +98,10 @@ MILVUS_SECURE = _get("MILVUS_SECURE", "false").lower() == "true"
 MILVUS_FULLTEXT_INDEX_FILED = _get("MILVUS_FULLTEXT_INDEX_FILED", "code_data")
 MILVUS_CODE_INDEX_FILED = _get("MILVUS_CODE_INDEX_FILED", "code_data")
 MILVUS_VECTOR_FILED = _get("MILVUS_VECTOR_FILED", "code__embedding")
+MILVUS_FULLTEXT_SIZE = int(_get("MILVUS_FULLTEXT_SIZE", "50"))
+MILVUS_VECTOR_SIZE = int(_get("MILVUS_VECTOR_SIZE", "10"))
+MILVUS_RETURN_SIZE = int(_get("MILVUS_RETURN_SIZE", "10"))
+MILVUS_HYBRID_ALPHA = float(_get("MILVUS_HYBRID_ALPHA", "0.6"))
 
 # ====== Claude Code API Keys 配置 ==================
 CLAUDE_API_KEYS_STR = _get("CLAUDE_API_KEYS", "")
