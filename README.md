@@ -15,7 +15,3 @@ batch_import.py batch_import_code.py
 python es_to_milvus_migrator.py --recreate-collection 
 
 > python batch_import_code.py
-
-## 验证数据
-查看某个批次的文档数和软件数
-> python verify_batch.py <批次数> 
