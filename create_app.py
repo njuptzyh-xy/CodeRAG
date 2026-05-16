@@ -4,13 +4,11 @@ from routes.retrieval_route import retrieval_route
 from routes.neo4j_route import neo4j_route
 from routes.upload_file_route import upload_file_route
 from routes.health_route import health_route
-from prometheus import setup_metrics
 
 
 def create_app():
     app = Flask(__name__)
     register_routes(app)
-    setup_metrics(app)
     return app
 
 

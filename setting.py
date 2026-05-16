@@ -1,20 +1,10 @@
-"""
-应用配置：优先从 Apollo 配置中心读取，未接入或取不到时使用环境变量/默认值。
-环境变量仅保留 Apollo 相关：APOLLO_APP_ID、APOLLO_CLUSTER、APOLLO_META_SERVER。
-"""
+"""应用配置：从环境变量读取，未设置时使用默认值。"""
 
 import os
 
-try:
-    from config.apollo_client import apollo_client
-except Exception:
-    apollo_client = None
-
 
 def _get(key: str, default: str = "") -> str:
-    """优先从 Apollo 获取配置，否则从环境变量或默认值"""
-    if apollo_client:
-        return apollo_client.get_value(key, default=default)
+    """从环境变量获取配置，未设置时返回默认值。"""
     return os.getenv(key, default)
 
 
@@ -142,5 +132,3 @@ GITEA_URL = _get("GITEA_URL", "http://10.1.1.155:3000")
 GITEA_ADMIN_USER = _get("GITEA_ADMIN_USER", "root")
 GITEA_ADMIN_PASSWORD = _get("GITEA_ADMIN_PASSWORD", "Admin@1234")
 GITEA_ORG_NAME = _get("GITEA_ORG_NAME", "red_team_rag")
-
-TestApollo = _get("TestApollo", "false")
