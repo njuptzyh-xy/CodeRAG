@@ -9,17 +9,18 @@ def _get(key: str, default: str = "") -> str:
 
 
 # neo4j 数据库设置
-NEO4J_URI = _get("NEO4J_URI", "bolt://10.7.7.200:17687")
+NEO4J_URI = _get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = _get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = _get("NEO4J_PASSWORD", "D6gkdYMp3NrDzh")
 NEO4J_DATABASE = _get("NEO4J_DATABASE", "neo4j")
 INDEX_NAME = _get("INDEX_NAME", "mitre_acttack_index")
 
 # Embedding 模型设置
-EMBEDDING_URL = _get("EMBEDDING_URL", "http://10.1.1.125:14829/get_embeddings/stella")
+EMBEDDING_URL = _get("EMBEDDING_URL", "http://localhost:8003/get_embeddings/stella")
 EMBEDDING_API_KEY = _get(
     "EMBEDDING_API_KEY", "huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876"
 )
+EMBEDDING_DIM = int(_get("EMBEDDING_DIM", "1536"))
 
 # Chat 模型设置
 CHAT_URL = _get("CHAT_URL", "https://api.deepseek.com")
@@ -35,16 +36,17 @@ OPENAI_TEMPERATURE = float(_get("OPENAI_TEMPERATURE", "0"))
 OPENAI_MAX_TOKENS = int(_get("OPENAI_MAX_TOKENS", "25000"))
 
 # rerank 模型设置
-RERANK_URL = _get("RERANK_URL", "http://10.7.7.200:8223/rerank")
+RERANK_URL = _get("RERANK_URL", "http://localhost:8001/rerank")
 # 上传文件切块请求 url
 UPLOAD_FILE_CHUNK_URL = _get(
-    "UPLOAD_FILE_CHUNK_URL", "http://10.7.7.200:8010/submit-parse-job-from-file"
+    "UPLOAD_FILE_CHUNK_URL", "http://localhost:8002/submit-parse-job-from-file"
 )
 DOWNLOAD_FILE_CHUNK_URL = _get(
-    "DOWNLOAD_FILE_CHUNK_URL", "http://10.7.7.200:8010/task-status/"
+    "DOWNLOAD_FILE_CHUNK_URL", "http://localhost:8002/task-status/"
 )
 # 图片识别 url
-OCR_URL = _get("OCR_URL", "http://10.7.7.200/ocr-image")
+OCR_URL = _get("OCR_URL", "http://localhost:8890/image-ocr")
+OCR_TIMEOUT = float(_get("OCR_TIMEOUT", "20"))
 
 # 图谱查询的节点字段（固定结构，一般不需按环境变更）
 NODE_RETURN_FIELDS = {
@@ -87,8 +89,8 @@ NODE_RETURN_FIELDS = {
 }
 
 # ====== Milvus 配置 ==================
-MILVUS_HOST = _get("MILVUS_HOST", "10.7.7.200")
-MILVUS_PORT = int(_get("MILVUS_PORT", "19534"))
+MILVUS_HOST = _get("MILVUS_HOST", "localhost")
+MILVUS_PORT = int(_get("MILVUS_PORT", "19530"))
 MILVUS_USER = _get("MILVUS_USER", "root")
 MILVUS_PASSWORD = _get("MILVUS_PASSWORD", "Milvus")
 MILVUS_DB_NAME = _get("MILVUS_DB_NAME", "default")

@@ -29,12 +29,14 @@ from setting import (
     DOWNLOAD_FILE_CHUNK_URL,
     EMBEDDING_URL,
     OCR_URL,
+    OCR_TIMEOUT,
     UPLOAD_FILE_CHUNK_URL,
     NEO4J_USER,
     NEO4J_PASSWORD,
     NEO4J_URI,
     NEO4J_DATABASE,
     EMBEDDING_API_KEY,
+    EMBEDDING_DIM,
     MILVUS_HOST,
     MILVUS_PORT,
     MILVUS_USER,
@@ -203,11 +205,120 @@ def judge_data_about_safe(response_data):
         return {"sign": 0}
 
 def get_picture_data_by_ocr(picture_data):
-    ocr_url = OCR_URL
-    payload = {"base64_str": picture_data}
-    response = session.post(ocr_url, json=payload)
-    if response.status_code == 200:
-        response_data = response.json().get("ocr_result")
+    if not picture_data or not isinstance(picture_data, str):
+        return {
+            "status": "error",
+            "safe_sign": 0,
+            "response_data": "invalid image base64 payload",
+        }
+
+    def _extract_ocr_text(response_json):
+        if not isinstance(response_json, dict):
+            return None
+        if response_json.get("ocr_result") is not None:
+            return response_json.get("ocr_result")
+        if response_json.get("texts") is not None:
+            return response_json.get("texts")
+        return None
+
+    def _normalize_ocr_text(response_data):
+        if isinstance(response_data, str):
+            return response_data.strip()
+        if isinstance(response_data, list):
+            normalized_lines = []
+            for item in response_data:
+                if isinstance(item, str):
+                    normalized_lines.append(item.strip())
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("value")
+                    if text:
+                        normalized_lines.append(str(text).strip())
+                elif item is not None:
+                    normalized_lines.append(str(item).strip())
+            return "\n".join(line for line in normalized_lines if line)
+        if response_data is None:
+            return ""
+        return str(response_data).strip()
+
+    def _build_fallback_url(url):
+        if url.endswith("/ocr-image"):
+            return url[: -len("/ocr-image")] + "/image-ocr"
+        if url.endswith("/image-ocr"):
+            return url[: -len("/image-ocr")] + "/ocr-image"
+        return None
+
+    ocr_attempts = []
+    for payload in ({"img_base64": picture_data}, {"base64_str": picture_data}):
+        ocr_attempts.append((OCR_URL, payload))
+
+    fallback_url = _build_fallback_url(OCR_URL)
+    if fallback_url:
+        for payload in ({"img_base64": picture_data}, {"base64_str": picture_data}):
+            ocr_attempts.append((fallback_url, payload))
+
+    # 去重，避免相同 URL/payload 组合重复请求
+    deduped_attempts = []
+    seen_attempts = set()
+    for ocr_url, payload in ocr_attempts:
+        signature = (ocr_url, tuple(sorted(payload.keys())))
+        if signature in seen_attempts:
+            continue
+        seen_attempts.add(signature)
+        deduped_attempts.append((ocr_url, payload))
+
+    last_error = None
+    for ocr_url, payload in deduped_attempts:
+        try:
+            response = session.post(ocr_url, json=payload, timeout=OCR_TIMEOUT)
+        except Exception as e:
+            last_error = f"{ocr_url} request failed: {e}"
+            continue
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except json.JSONDecodeError:
+                error_body = response.text
+            last_error = {
+                "url": ocr_url,
+                "payload_keys": list(payload.keys()),
+                "status_code": response.status_code,
+                "body": error_body,
+            }
+            continue
+
+        try:
+            response_json = response.json()
+        except json.JSONDecodeError:
+            last_error = {
+                "url": ocr_url,
+                "payload_keys": list(payload.keys()),
+                "status_code": response.status_code,
+                "body": response.text,
+            }
+            continue
+
+        response_data = _extract_ocr_text(response_json)
+        if response_data is None:
+            last_error = {
+                "url": ocr_url,
+                "payload_keys": list(payload.keys()),
+                "status_code": response.status_code,
+                "body": response_json,
+            }
+            continue
+
+        response_data = _normalize_ocr_text(response_data)
+        if not response_data:
+            last_error = {
+                "url": ocr_url,
+                "payload_keys": list(payload.keys()),
+                "status_code": response.status_code,
+                "body": response_json,
+                "reason": "empty ocr text",
+            }
+            continue
+
         # 接下来判断 response_data 的类型，
         # 使用模型判断是否是安全相关的知识或者代码、命令行命令相关的数据
         safe_sign = judge_data_about_safe(response_data)
@@ -217,14 +328,8 @@ def get_picture_data_by_ocr(picture_data):
             "safe_sign": safe_sign,
             "response_data": response_data,
         }
-    else:
-        # 获取非200状态码的响应信息
-        try:
-            error_response = response.json()
-            return {"status": "error", "safe_sign": 0, "response_data": error_response}
-        except json.JSONDecodeError:
-            # 如果响应不是JSON格式，返回文本内容
-            return {"status": "error", "safe_sign": 0, "response_data": response.text}
+
+    return {"status": "error", "safe_sign": 0, "response_data": last_error}
 
 
 def handle_picture_in_json_file(chunk_json_file_path):
@@ -560,14 +665,14 @@ def get_embhedding(chunk_description):
             embeddings = data.get("embeddings")
             if embeddings:
                 return embeddings[0]
-            print(f"[get_embhedding] Stella 返回为空")
+            print("[get_embhedding] embedding 服务返回为空")
             return None
         print(
-            f"[get_embhedding] Stella 请求失败 status={response.status_code}, body={response.text}"
+            f"[get_embhedding] embedding 请求失败 status={response.status_code}, body={response.text}"
         )
         return None
     except Exception as e:
-        print(f"[get_embhedding] Stella 请求异常: {e}")
+        print(f"[get_embhedding] embedding 请求异常: {e}")
         return None
 
 
@@ -686,7 +791,7 @@ def _ensure_milvus_collection():
         raise RuntimeError("Milvus 未连接，无法创建 collection")
 
     collection_name = MILVUS_COLLECTION
-    vector_dim = 1024  # 根据用户要求，向量维度为 1024
+    vector_dim = EMBEDDING_DIM
 
     # 检查 collection 是否存在
     try:
@@ -973,10 +1078,10 @@ def add_milvus(all_embedding_element_id, soft_name,repo_url=""):
                 continue
 
             actual_dim = len(embedding)
-            if actual_dim != 1024:
+            if actual_dim != EMBEDDING_DIM:
                 error_count += 1
                 print(
-                    f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 1024, 实际 {actual_dim})"
+                    f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 {EMBEDDING_DIM}, 实际 {actual_dim})"
                 )
                 continue
 

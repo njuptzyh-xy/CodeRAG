@@ -45,14 +45,14 @@ class OpenaiEmbeddingClient:
                 embeddings = data.get("embeddings")
                 if embeddings:
                     return embeddings[0]
-                print("[embed_query] Stella 返回为空")
+                print("[embed_query] embedding 服务返回为空")
                 return None
             print(
-                f"[embed_query] Stella 请求失败 status={response.status_code}, body={response.text}"
+                f"[embed_query] embedding 请求失败 status={response.status_code}, body={response.text}"
             )
             return None
         except Exception as e:
-            print(f"[embed_query] Stella 请求异常: {e}")
+            print(f"[embed_query] embedding 请求异常: {e}")
             return None
 
 

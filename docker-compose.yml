@@ -33,6 +33,7 @@ services:
       # Embedding 模型设置
       - EMBEDDING_URL=http://10.1.1.125:14829/get_embeddings/stella
       - EMBEDDING_API_KEY=huaqing-embedding-key-9b677e7e-6694-11ef-83d7-ac162d803876
+      - EMBEDDING_DIM=1536
       
       # Chat 模型设置
       - CHAT_URL=https://api.deepseek.com
@@ -55,7 +56,8 @@ services:
       - DOWNLOAD_FILE_CHUNK_URL=http://10.7.7.200:8010/task-status/
       
       # 图片识别 URL
-      - OCR_URL=http://10.7.7.200/ocr-image
+      - OCR_URL=http://10.7.7.200/image-ocr
+      - OCR_TIMEOUT=20
       
       # Milvus 配置
       - MILVUS_HOST=10.7.7.200

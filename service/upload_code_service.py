@@ -46,6 +46,7 @@ from setting import (
     MILVUS_COLLECTION,
     MILVUS_CONSISTENCY_LEVEL,
     MILVUS_SECURE,
+    EMBEDDING_DIM,
 )
 from gitea_service import upload_to_gitea
 
@@ -669,15 +670,15 @@ def send_request_embedding(text):
             if embeddings:
                 return texts_ids, embeddings
             logger.info(
-                f"[send_request_embedding] Stella 返回为空 elementId={texts_ids}"
+                f"[send_request_embedding] embedding 服务返回为空 elementId={texts_ids}"
             )
             return None
         logger.info(
-            f"[send_request_embedding] Stella 请求失败 status={response.status_code}, body={response.text}"
+            f"[send_request_embedding] embedding 请求失败 status={response.status_code}, body={response.text}"
         )
         return None
     except Exception as e:
-        logger.info(f"[send_request_embedding] Stella 请求异常: {e}")
+        logger.info(f"[send_request_embedding] embedding 请求异常: {e}")
         return None
 
 
@@ -842,7 +843,7 @@ def _ensure_milvus_collection():
         raise RuntimeError("Milvus 未连接，无法创建 collection")
 
     collection_name = MILVUS_COLLECTION
-    vector_dim = 1024  # 根据用户要求，向量维度为 1024
+    vector_dim = EMBEDDING_DIM
 
     # 检查 collection 是否存在
     try:
@@ -1132,10 +1133,10 @@ def add_milvus(all_embedding_element_id):
                 continue
 
             actual_dim = len(embedding)
-            if actual_dim != 1024:
+            if actual_dim != EMBEDDING_DIM:
                 error_count += 1
                 print(
-                    f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 1024, 实际 {actual_dim})"
+                    f"跳过记录 {neo4j_id}: 向量维度不正确 (期望 {EMBEDDING_DIM}, 实际 {actual_dim})"
                 )
                 continue
 
@@ -1344,9 +1345,11 @@ def add_milvus_from_chunks(all_chunks_data, repo_url: str = ""):
         soft_name = chunk_result.get("soft_name", "")
 
         # 验证向量维度
-        if not isinstance(embedding, list) or len(embedding) != 1024:
+        if not isinstance(embedding, list) or len(embedding) != EMBEDDING_DIM:
             error_count += 1
-            logger.warning(f"[add_milvus_from_chunks] 代码块 {neo4j_id} 向量维度不正确")
+            logger.warning(
+                f"[add_milvus_from_chunks] 代码块 {neo4j_id} 向量维度不正确，期望 {EMBEDDING_DIM} 维"
+            )
             continue
 
         neo4j_ids.append(neo4j_id)
